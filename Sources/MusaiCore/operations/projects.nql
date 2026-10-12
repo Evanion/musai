@@ -1,0 +1,23 @@
+query AllProjects($first: Int = 200) {
+  projects(orderBy: [{name: ASC}], first: $first) { ...ProjectBits }
+}
+
+query ProjectBySlug($slug: String!) {
+  project(by: {slug: $slug}) { ...ProjectBits }
+}
+
+mutation CreateProject($name: String!, $slug: String!, $summary: String, $repoRemote: String, $rootPath: String) {
+  createProject(input: {name: $name, slug: $slug, status: ACTIVE, summary: $summary, repoRemote: $repoRemote, rootPath: $rootPath}) { id }
+}
+
+mutation UpsertProject($name: String!, $slug: String!, $repoRemote: String, $rootPath: String) {
+  upsertProject(by: {slug: $slug}, input: {name: $name, slug: $slug, status: ACTIVE, repoRemote: $repoRemote, rootPath: $rootPath}) { id }
+}
+
+mutation SetProjectStatus($id: ID!, $status: ProjectStatus!) {
+  updateProject(by: {id: $id}, set: {status: {set: $status}}) { id status }
+}
+
+mutation DeleteProject($id: ID!) {
+  deleteProject(by: {id: $id})
+}

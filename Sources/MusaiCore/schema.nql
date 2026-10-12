@@ -1,0 +1,10 @@
+enum ProjectStatus { ACTIVE PAUSED DONE ARCHIVED }
+
+type Project {
+  name: String!
+  slug: String! @unique
+  status: ProjectStatus! @index
+  summary: String @fulltext
+  repoRemote: String @index
+  rootPath: String @index
+}

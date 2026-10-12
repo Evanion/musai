@@ -1,0 +1,11 @@
+fragment ProjectBits on Project {
+  id
+  name
+  slug
+  status
+  summary
+  repoRemote
+  rootPath
+  createdAt
+  updatedAt
+}
