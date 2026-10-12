@@ -29,6 +29,17 @@ struct MusaiHook {
                     await runner.run(
                         event: event, stdin: stdin,
                         cwd: FileManager.default.currentDirectoryPath))
+            case "install":
+                guard arguments.contains("--claude-code") else {
+                    FileHandle.standardError.write(
+                        Data("musai: install --claude-code [--settings <path>]\n".utf8))
+                    return
+                }
+                let settings = arguments.firstIndex(of: "--settings").flatMap { index in
+                    index + 1 < arguments.count ? URL(fileURLWithPath: arguments[index + 1]) : nil
+                } ?? Self.claudeSettingsURL()
+                let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path
+                print(try MusaiInstall.install(executable: executable, settingsURL: settings))
             case "review":
                 let library = try await MusaiLibrary.open(at: url)
                 _ = try await ReviewSession(db: library.db).run(as: MusaiActors.user)
@@ -38,6 +49,12 @@ struct MusaiHook {
         } catch {
             FileHandle.standardError.write(Data("musai: \(error)\n".utf8))
         }
+    }
+
+    private static func claudeSettingsURL() -> URL {
+        let configDirectory = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
+        return URL(fileURLWithPath: configDirectory).appending(path: "settings.json")
     }
 
     private static func emit(_ outcome: HookOutcome) {
