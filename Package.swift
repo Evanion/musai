@@ -21,6 +21,8 @@ let package = Package(
             plugins: [.plugin(name: "NorvoCodegen", package: "norvo-swift")]
         ),
         .executableTarget(name: "musai", dependencies: ["MusaiCore"]),
-        .testTarget(name: "MusaiCoreTests", dependencies: ["MusaiCore"])
+        // The executable is a dependency so the host adapter's tests — which must live with the adapter, in
+        // the CLI — can reach it through `@testable import musai`.
+        .testTarget(name: "MusaiCoreTests", dependencies: ["MusaiCore", "musai"])
     ]
 )

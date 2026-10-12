@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import MusaiCore
+@testable import musai
 
 @Suite struct TranscriptTailTests {
     private func fixture(_ lines: [String]) throws -> URL {

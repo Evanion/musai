@@ -65,13 +65,18 @@ public enum MusaiToken {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// The token already on disk, or `nil` when there is none. A client reads it; only the agent mints one,
+    /// so a hook that finds no backend never writes a secret as a side effect.
+    public static func read(at url: URL = defaultURL) -> String? {
+        guard let existing = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        let token = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
     /// The token already on disk, or a fresh one written 0600. An empty file is treated as absent — a blank
     /// token authorises no one, so it is replaced rather than honoured.
     public static func loadOrCreate(at url: URL = defaultURL) throws -> String {
-        if let existing = try? String(contentsOf: url, encoding: .utf8) {
-            let token = existing.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !token.isEmpty { return token }
-        }
+        if let token = read(at: url) { return token }
         let token = new()
         try writePrivate(Data(token.utf8), to: url)
         return token
