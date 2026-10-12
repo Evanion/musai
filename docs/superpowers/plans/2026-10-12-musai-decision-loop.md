@@ -20,7 +20,10 @@
 - **A hook must never break the host session.** Every hook path exits 0; on any error it writes a diagnostic to stderr and prints nothing on stdout. Only the session-start hook prints, and only the documented JSON.
 - **Networking is limited to loopback Ollama** (`127.0.0.1:11434`), which §12 of the app design allows. No other network call.
 - Local-first, host-agnostic: the core knows nothing about Claude Code; only the `hook` subcommand does.
-- Curator model default: `qwen3.6:27b` (installed), overridable with `MUSAI_CURATOR_MODEL`.
+- **The curator's model and provider are configuration, not code**: embedded (MLX), local (LM Studio, vLLM,
+  Ollama, llama.cpp) or cloud (Anthropic, OpenAI, Ollama Cloud), in `Application Support/Musai/config.json`.
+  Defaults: `openAICompatible` at `http://127.0.0.1:11434/v1` with `qwen3.6:27b`. A cloud API key is read from
+  the environment variable the config names and is never written to the config or the store.
 
 ## Review Focus
 
@@ -590,7 +593,7 @@ public struct HookRunner: Sendable {
   - `UserPromptSubmit` → `capture.captureUserTurn(prompt, at, origin: "claude", session, cwd)`; `stdout: nil`.
   - `PostToolUse` → `capture.captureToolUse(toolName, target, digest: SHA256 of "tool\u{1F}target", at, session, cwd)`.
   - `Stop` → `capture.captureAgentTurn(TranscriptTail.lastAssistantText(at:), …)`, then `ProposalCurator.drain`
-    with the detector resolved from the environment; wired in Tasks 4 and 6.
+    with the provider resolved from `ModelConfiguration`; wired in Tasks 4 and 6.
   - `SessionStart` → `MusaiSlice.render`, and `stdout` is the `additionalContext` JSON; wired in Task 5.
   - any other event → `HookOutcome.silent`.
   - any thrown error, a malformed payload, or a missing session → `HookOutcome(stdout: nil, diagnostic: "musai: <one line>")`.
@@ -996,68 +999,93 @@ git commit -m "feat: the curator drains the queue into proposals"
 
 ---
 
-### Task 7: The Ollama detector
+### Task 7: The detector's model, as configuration
 
 **Files:**
-- Create: `Sources/MusaiCore/OllamaDecisionDetector.swift`
-- Test: `Tests/MusaiCoreTests/OllamaDetectorTests.swift`
+- Create: `Sources/MusaiCore/ModelConfiguration.swift`, `Sources/MusaiCore/ModelProvider.swift`,
+  `Sources/MusaiCore/OpenAICompatibleProvider.swift`, `Sources/MusaiCore/ModelDecisionDetector.swift`
+- Test: `Tests/MusaiCoreTests/ModelProviderTests.swift`
 
 **Interfaces:**
 - Consumes: Task 6's `DecisionDetector`, `DetectedEvent`, `DetectedDecision`.
-- Produces: `struct OllamaDecisionDetector: DecisionDetector { init(model: String, endpoint: URL = URL(string: "http://127.0.0.1:11434")!, transport: any ModelTransport = URLSessionTransport()) }`;
-  `protocol ModelTransport: Sendable { func send(_ request: URLRequest, body: Data) async throws -> Data }`.
+- Produces:
+  - `struct ModelConfiguration: Codable, Sendable { var kind: Kind; var baseURL: String; var model: String; var apiKeyEnv: String?; var timeout: Duration; var maxTokens: Int }`, with
+    `enum Kind: String, Codable, Sendable { case openAICompatible, anthropic, mlx }`,
+    `static func load(from url: URL) throws -> ModelConfiguration`,
+    `func write(to url: URL) throws`, `static var defaultFileURL: URL`, `static var `default`: ModelConfiguration`.
+  - `protocol ModelProvider: Sendable { func complete(system: String, user: String, schema: Data) async throws -> String }`
+  - `protocol ModelTransport: Sendable { func send(_ request: URLRequest, body: Data) async throws -> Data }`
+    and `struct URLSessionTransport: ModelTransport`
+  - `struct OpenAICompatibleProvider: ModelProvider { init(configuration: ModelConfiguration, transport: any ModelTransport = URLSessionTransport()) }`
+  - `struct ModelDecisionDetector: DecisionDetector { init(provider: any ModelProvider) }`
 
-The transport is the seam that keeps the test off the network, so the detector's prompt and its parsing are
-testable without a model.
+The model and its provider are **configuration, never a code path**. Embedded (MLX, in-process), local
+(LM Studio, vLLM, Ollama, llama.cpp) and cloud (Anthropic, OpenAI, Ollama Cloud) are one shape: a system
+prompt in, JSON out. `openAICompatible` already covers every local server in that list, because each exposes
+`/v1/chat/completions`; `anthropic` and `mlx` are later providers behind the same protocol, and the detector
+does not change when they arrive. Cloud is opt-in and labelled, and an API key is read from the environment
+variable `apiKeyEnv` names — it is **never** written into the config file or the store.
 
-- [ ] **Step 1: Write the failing test `Tests/MusaiCoreTests/OllamaDetectorTests.swift`**
+Defaults written on first use: `kind: openAICompatible`, `baseURL: http://127.0.0.1:11434/v1` (Ollama's
+OpenAI-compatible endpoint), `model: qwen3.6:27b`, `apiKeyEnv: nil`, 120 s, 2 048 tokens.
 
-A stub `ModelTransport` returns a fixed Ollama-shaped response body
-(`{"message":{"content":"<json>"}}`) whose content is a JSON object
-`{"decisions":[{"title":"One Norvo file","rationale":"Anti-clunk","act":"DECISION","utterance_index":0}]}`, and
-records the request it was handed. Five tests:
+- [ ] **Step 1: Write the failing tests `Tests/MusaiCoreTests/ModelProviderTests.swift`**
 
-1. `itParsesDecisionsFromTheModelsJSON` — one `DetectedEvent` in, one `DetectedDecision` out with those values.
-2. `itSendsTheModelAndAConstrainedRequest` — the recorded request's path is `/api/chat`, its body names
-   `model == "qwen3.6:27b"`, and it carries a `format` (the JSON schema) and `stream == false`.
-3. `invalidJSONFromTheModelProposesNothing` — content `"I think maybe one decision?"` → `[]`, no throw.
-4. `aHallucinatedUtteranceIndexIsDroppedNotCrashing` — `utterance_index: 99` with one event → the decision is
-   still returned but with `utterance == nil`.
-5. `anEmptyEventListDoesNotCallTheModel` — the stub records no request and the result is `[]`.
+A stub `ModelTransport` answers with an OpenAI-shaped body whose `choices[0].message.content` is the model's
+JSON, and records the request and body it was handed. Seven tests:
+
+1. `theDefaultConfigurationRoundTripsThroughItsFile` — `ModelConfiguration.default` writes to a temp URL and
+   loads back equal; the file contains no key.
+2. `theProviderPostsAnOpenAICompatibleRequest` — the recorded request's path is `/v1/chat/completions`, its body
+   names `model == "qwen3.6:27b"`, carries a `response_format` of type `json_schema`, and `stream == false`.
+3. `aCloudKeyComesFromTheEnvironmentAndIsNeverStored` — with `kind == .anthropic` and `apiKeyEnv == "MUSAI_TEST_KEY"`,
+   the config file on disk contains no key material while the request carries it as a header.
+4. `itParsesDecisionsFromTheModelsJSON` — one `DetectedEvent` in, one `DetectedDecision` out with the model's
+   `title`, `rationale`, `act` and `utterance` (resolved through `utterance_index`).
+5. `invalidJSONFromTheModelProposesNothing` — content `"I think maybe one decision?"` → `[]`, no throw.
+6. `aHallucinatedUtteranceIndexIsDroppedNotCrashing` — `utterance_index: 99` with one event → the decision comes
+   back with `utterance == nil`, which Task 6's curator then skips.
+7. `anEmptyEventListDoesNotCallTheProvider` — the stub records no request and the result is `[]`.
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `swift test --filter OllamaDetectorTests`
-Expected: FAIL — `cannot find 'OllamaDecisionDetector' in scope`.
+Run: `swift test --filter ModelProviderTests`
+Expected: FAIL — `cannot find 'ModelConfiguration' in scope`.
 
-- [ ] **Step 3: Write `Sources/MusaiCore/OllamaDecisionDetector.swift`**
+- [ ] **Step 3: Write the four files**
 
-The body the interfaces leave open: a system prompt that states the job and the anti-goal, a user message that
-renders the events as a numbered list (`[0] user: …`, `[1] tool Edit Sources/…`), `format` set to a JSON schema
-with `decisions: [{title, rationale, act, utterance_index}]`, `stream: false`, and `options.temperature: 0`.
-Response parsing uses `JSONDecoder` over the `message.content` string; on any failure it returns `[]`. The
-prompt is pinned in the file as a constant so a reviewer can read it.
+The bodies the interfaces leave open. `ModelConfiguration.load` reads JSON at `defaultFileURL`
+(`Application Support/Musai/config.json`), writes the default when the file is absent, and falls back to
+`.default` when the file is unreadable — a broken config must not stop the loop.
 
-The prompt must instruct, verbatim in spirit: propose **only** decisions the user actually settled, in the
-user's own words where possible; when unsure, propose nothing; never propose an idea the assistant raised
-unless the user agreed to it; never propose more than five per batch.
+`OpenAICompatibleProvider.complete` posts to `{baseURL}/chat/completions` with `model`, `messages`,
+`temperature: 0`, `stream: false`, and `response_format: {"type": "json_schema", "json_schema": {...}}` built
+from `schema`, plus `Authorization: Bearer <key>` when `apiKeyEnv` resolves. It decodes
+`choices[0].message.content`; anything else throws.
+
+`ModelDecisionDetector.propose` renders the events as a numbered list (`[0] user: …`, `[1] tool Edit
+Sources/…`), calls the provider, and decodes `{"decisions":[{"title","rationale","act","utterance_index"}]}`.
+Any failure to decode returns `[]`. The system prompt is a constant in the file, so a reviewer can read it,
+and it must instruct: propose **only** decisions the user actually settled, in the user's own words where
+possible; when unsure, propose nothing; never propose an idea the assistant raised unless the user agreed to
+it; never propose more than five per batch.
 
 - [ ] **Step 4: Run them to verify they pass**
 
-Run: `swift test --filter OllamaDetectorTests`
-Expected: PASS, 5 tests.
+Run: `swift test --filter ModelProviderTests`
+Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Run one live check, opt-in**
 
-Run: `MUSAI_LIVE_MODEL=1 swift test --filter OllamaDetectorTests.live` — a single test, skipped unless
-`MUSAI_LIVE_MODEL` is set, that sends one real captured exchange to the installed model and asserts only that
-it returns valid JSON. It is not part of the suite's default run.
+Run: `MUSAI_LIVE_MODEL=1 swift test --filter ModelProviderTests.live` — one test, skipped unless
+`MUSAI_LIVE_MODEL` is set, that sends a real captured exchange to whatever the config names and asserts only
+that it returns valid JSON. Not part of the suite's default run.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Sources/MusaiCore/OllamaDecisionDetector.swift Tests/MusaiCoreTests/OllamaDetectorTests.swift
-git commit -m "feat: a local detector over loopback Ollama, testable without a model"
+git add Sources/MusaiCore/ModelConfiguration.swift Sources/MusaiCore/ModelProvider.swift Sources/MusaiCore/OpenAICompatibleProvider.swift Sources/MusaiCore/ModelDecisionDetector.swift Tests/MusaiCoreTests/ModelProviderTests.swift
+git commit -m "feat: the detector's model as configuration — embedded, local, or cloud"
 ```
 
 ---
@@ -1262,6 +1290,10 @@ git commit -m "test: the loop end to end, and the one question a test cannot ans
   there is nothing yet for an `Artifact` to hold. An artifact as an *input* — the mock the person showed, the
   screenshot — needs the ingestion slice to have somewhere to put its bytes, and that is where the type earns
   its place.
+- **The model manager** (`§14`, `§16.4`): a curated list of embedded models with a one-line rationale each,
+  pinned by Hugging Face revision, downloaded only on the person's say-so, plus the Anthropic and MLX providers
+  behind the `ModelProvider` protocol this plan pins. The embedder is not part of that list — the Lite spec
+  fixes it at `qwen3-embedding-0.6b`.
 - **The rest of the host matrix** (OpenCode, Cursor, Codex, Pi), the menu-bar surface and the launch agent, the
   detector's quality evaluation on a fixed set of real sessions, and the migration that seeds the graph from
   claude-mem — which reuses this plan's confirmation surface.
