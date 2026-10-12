@@ -8,7 +8,10 @@ let norvoPath = ProcessInfo.processInfo.environment["MUSAI_NORVO_PATH"] ?? "../n
 let package = Package(
     name: "Musai",
     platforms: [.macOS(.v14)],
-    products: [.library(name: "MusaiCore", targets: ["MusaiCore"])],
+    products: [
+        .library(name: "MusaiCore", targets: ["MusaiCore"]),
+        .executable(name: "musai", targets: ["musai"]),
+    ],
     dependencies: [.package(path: norvoPath)],
     targets: [
         .target(
@@ -17,6 +20,7 @@ let package = Package(
             exclude: ["schema.nql", "migrations", "operations"],
             plugins: [.plugin(name: "NorvoCodegen", package: "norvo-swift")]
         ),
+        .executableTarget(name: "musai", dependencies: ["MusaiCore"]),
         .testTarget(name: "MusaiCoreTests", dependencies: ["MusaiCore"])
     ]
 )

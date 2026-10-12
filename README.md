@@ -33,6 +33,30 @@ swift test                          # all suites
 swift test --filter ProjectTests    # one suite
 ```
 
+## Install it into Claude Code
+
+```sh
+swift build
+musai install --claude-code          # merges four hooks into ~/.claude/settings.json, with a backup
+```
+
+Then work a session as usual, run `musai review` to confirm what the curator proposes, and start a new session
+to see what the agent is handed. `docs/claude-code-hooks.md` has each hook, its timeout, the model
+configuration, and how to uninstall.
+
+## Try the loop by hand
+
+```sh
+musai install --claude-code
+# work a session in Claude Code as usual, then:
+musai review            # confirm or correct what the curator proposes
+# start a new session and read what the agent is handed
+```
+
+The question this slice exists to answer is the one a test cannot: **did confirming those proposals feel like
+one keystroke, or like clerk work?** That answer decides whether the model changes and the rest of the host
+matrix are worth building, so it belongs in the next design rather than in someone's memory.
+
 ## Layout
 
 ```
@@ -46,3 +70,6 @@ Sources/MusaiCore/
 
 `.nql` files are excluded from compilation; the `NorvoCodegen` build plugin turns them into
 `Norvo.generated.swift` (the typed operations and `NorvoSchema.migrations`).
+
+`Sources/musai` is the executable the host's hooks call. Everything it does lives in `MusaiCore`, so that
+"a hook can never break the host" is a test rather than a hope.

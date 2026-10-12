@@ -218,6 +218,26 @@ Order, confirmed: (1) this loop; (2) the claude-mem migration, which is evidence
 than a payload, and reuses this document's confirmation surface to turn one-sided entries into real
 decisions; (3) one reader per source, each its own slice.
 
+### The reviewer, when the loop closes
+
+Closed-loop automation (`§11` of the main design) hands a Task to an agent and needs a verdict on what came
+back. That verdict is **this document's machinery, pointed at the agent's output instead of the person's
+input**, and it is worth designing as such rather than as a separate feature:
+
+- **Check the work against the settled decisions that constrain it**, not against the task's text alone. "You
+  did the task and contradicted a decision the person settled in September" is the failure that costs real
+  rework, and it is the status failure in §1: a proposal read as a decision, an example read as a rule.
+- **Check the task, not the plan.** The Task is the unit handed over and the one that can carry acceptance
+  criteria; the plan is the container it came from.
+- **Give the verdict a statement's status too.** Who verified it, on what evidence, and is that verdict settled
+  or the agent's own claim? An agent reporting "done" is an unproposed proposal until something with the
+  person's authority settles it — which means the reviewer's disagreement is itself a decision, and it feeds
+  back into the loop rather than into a comment.
+
+What it must not be: a diff against the plan's text. A plan is an argument, and an implementation that deviates
+while satisfying the intent is the normal case, not a defect — so a reviewer of this kind needs the deviations
+and their stated reasons to adjudicate, not just the document.
+
 **The first slice, agreed:** the loop end to end and narrow — capture, detection and a minimal confirmation
 surface for Claude Code alone, plus the slice handed over when a task starts. OpenCode follows. The point of
 going narrow is to answer the one bet this design rests on — that a local model can propose decisions

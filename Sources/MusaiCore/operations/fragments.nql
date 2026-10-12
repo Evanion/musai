@@ -9,3 +9,24 @@ fragment ProjectBits on Project {
   createdAt
   updatedAt
 }
+
+fragment UtteranceBits on Utterance {
+  id
+  text
+  at
+  speaker
+  origin
+  session { id memorySessionId }
+}
+
+fragment EventBits on Event {
+  id
+  kind
+  text
+  tool
+  target
+  digest
+  at
+  drained
+  session { id memorySessionId }
+}

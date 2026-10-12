@@ -1,0 +1,38 @@
+query UtterancesForSession($session: String!) {
+  utterances(where: {session: {memorySessionId: {eq: $session}}}, orderBy: [{at: ASC}]) { ...UtteranceBits }
+}
+
+query EventsForSession($session: String!) {
+  events(where: {session: {memorySessionId: {eq: $session}}}, orderBy: [{at: ASC}]) { ...EventBits }
+}
+
+query UndrainedEvents($first: Int = 200) {
+  events(where: {drained: {eq: false}}, orderBy: [{createdAt: ASC}], first: $first) { ...EventBits }
+}
+
+mutation RecordUtterance($text: String!, $at: DateTime!, $speaker: Speaker!, $origin: String, $session: String!) {
+  createUtterance(input: {
+    text: $text
+    at: $at
+    speaker: $speaker
+    origin: $origin
+    session: {connect: {memorySessionId: $session}}
+  }) { id }
+}
+
+mutation RecordEvent($kind: EventKind!, $at: DateTime!, $text: String, $tool: String, $target: String, $digest: String, $session: String!) {
+  createEvent(input: {
+    kind: $kind
+    at: $at
+    text: $text
+    tool: $tool
+    target: $target
+    digest: $digest
+    drained: false
+    session: {connect: {memorySessionId: $session}}
+  }) { id }
+}
+
+mutation MarkEventDrained($id: ID!, $drainedAt: DateTime!) {
+  updateEvent(by: {id: $id}, set: {drained: {set: true}, drainedAt: {set: $drainedAt}}) { id drained }
+}

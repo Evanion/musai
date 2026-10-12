@@ -1,0 +1,70 @@
+fragment DecisionBits on Decision {
+  id
+  title
+  rationale
+  act
+  state
+  settledAt
+  persistedAt
+  document { id }
+  documentRef
+  subject { id }
+  utterance { id text at speaker }
+  project { slug }
+}
+
+query PendingDecisions($first: Int = 50) {
+  decisions(where: {state: {eq: PROPOSED}}, orderBy: [{createdAt: ASC}], first: $first) { ...DecisionBits }
+}
+
+query UnpersistedDecisions($first: Int = 50) {
+  decisions(where: {state: {eq: SETTLED}}, orderBy: [{createdAt: ASC}], first: $first) { ...DecisionBits }
+}
+
+query DecisionByID($id: ID!) {
+  decision(by: {id: $id}) { ...DecisionBits }
+}
+
+query DecisionsForProject($slug: String!, $first: Int = 50) {
+  decisions(
+    where: {project: {slug: {eq: $slug}}, state: {in: [SETTLED, PERSISTED]}}
+    orderBy: [{createdAt: ASC}], first: $first) { ...DecisionBits }
+}
+
+mutation RecordProposal($title: String!, $rationale: String, $act: ActKind!, $utterance: ID!, $project: String!) {
+  createDecision(input: {
+    title: $title
+    rationale: $rationale
+    act: $act
+    state: PROPOSED
+    utterance: {connect: {id: $utterance}}
+    project: {connect: {slug: $project}}
+  }) { id }
+}
+
+mutation SettleDecision($id: ID!, $settledAt: DateTime!) {
+  updateDecision(by: {id: $id}, set: {
+    state: {set: SETTLED}
+    settledAt: {set: $settledAt}
+  }) { id state }
+}
+
+mutation PersistDecisionInDocument($id: ID!, $document: ID!, $persistedAt: DateTime!) {
+  updateDecision(by: {id: $id}, set: {
+    state: {set: PERSISTED}
+    document: {connect: {id: $document}}
+    persistedAt: {set: $persistedAt}
+  }) { id state }
+}
+
+mutation PersistDecisionOutside($id: ID!, $documentRef: String!, $persistedAt: DateTime!) {
+  updateDecision(by: {id: $id}, set: {
+    state: {set: PERSISTED}
+    documentRef: {set: $documentRef}
+    persistedAt: {set: $persistedAt}
+  }) { id state }
+}
+
+mutation DropProposal($id: ID!) {
+  deleteDecision(by: {id: $id})
+}
