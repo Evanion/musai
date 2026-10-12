@@ -61,8 +61,7 @@ public struct ProjectBinder: Sendable {
     public func bind(cwd: URL, memorySessionId: String, platform: String, title: String? = nil,
         startedAt: Date, as actor: Actor
     ) async throws -> BoundSession {
-        let remote = Self.gitRemote(for: cwd)
-        let slug = try await projectSlug(cwd: cwd, remote: remote, as: actor)
+        let slug = try await resolveProject(cwd: cwd, as: actor)
         // Re-binding a session must not resurrect one that already finished.
         let existing = try await db.query(SessionByMemoryIdQuery(.init(memorySessionId: memorySessionId))).session
         let session = try await db.mutate(
@@ -79,14 +78,21 @@ public struct ProjectBinder: Sendable {
         return BoundSession(id: session.upsertSession.id, memorySessionId: memorySessionId, projectSlug: slug)
     }
 
+    /// The project a working directory belongs to, creating it when it is not known yet — the same
+    /// resolution `bind` makes, without upserting a session. The capture path and the drain use this.
+    public func resolveProject(cwd: URL, as actor: Actor) async throws -> String {
+        try await projectSlug(cwd: cwd, remote: Self.gitRemote(for: cwd), as: actor)
+    }
+
+    /// The project a working directory belongs to, when one is already known. A read must not write: a
+    /// typo'd `cwd` gets nothing, not a junk project left behind.
+    public func knownProject(cwd: URL) async throws -> String? {
+        try await lookupProject(cwd: cwd, remote: Self.gitRemote(for: cwd))
+    }
+
     /// The bound project's slug: by normalized remote, then by root path, then a new Project.
     private func projectSlug(cwd: URL, remote: String?, as actor: Actor) async throws -> String {
-        if let remote, let found = try await db.query(ProjectByRemoteQuery(.init(remote: remote))).projects.first {
-            return found.slug
-        }
-        if let found = try await db.query(ProjectByRootQuery(.init(root: cwd.path))).projects.first {
-            return found.slug
-        }
+        if let known = try await lookupProject(cwd: cwd, remote: remote) { return known }
         let name = cwd.lastPathComponent
         let base = Self.slugBase(name)
         let taken = try await db.query(ProjectBySlugQuery(.init(slug: base))).project != nil
@@ -95,6 +101,15 @@ public struct ProjectBinder: Sendable {
             UpsertProjectMutation(.init(name: name, slug: slug, repoRemote: remote, rootPath: cwd.path)),
             as: actor)
         return slug
+    }
+
+    /// The known project's slug, by normalized remote, then by root path.
+    private func lookupProject(cwd: URL, remote: String?) async throws -> String? {
+        if let remote,
+            let found = try await db.query(ProjectByRemoteQuery(.init(remote: remote))).projects.first {
+            return found.slug
+        }
+        return try await db.query(ProjectByRootQuery(.init(root: cwd.path))).projects.first?.slug
     }
 
     /// The ASCII-alphanumeric-and-dash base of a directory name; `project` when nothing is left of it.

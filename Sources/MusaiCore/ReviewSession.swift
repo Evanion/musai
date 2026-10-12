@@ -11,7 +11,7 @@ public enum ReviewAction: Sendable, Equatable {
     case skip
 }
 
-public struct Proposal: Sendable, Equatable {
+public struct Proposal: Sendable, Equatable, Codable {
     public let id: UUID
     public let title: String
     public let rationale: String?
@@ -21,7 +21,7 @@ public struct Proposal: Sendable, Equatable {
 }
 
 /// A decision that was settled and recorded nowhere. This set is the risk the loop exists to close.
-public struct Gap: Sendable, Equatable {
+public struct Gap: Sendable, Equatable, Codable {
     public let id: UUID
     public let title: String
     public let act: ActKind
