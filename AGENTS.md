@@ -11,8 +11,9 @@ package).
 - **Design:** `docs/superpowers/specs/2026-10-12-musai-design.md` — **approved 2026-10-12**.
 - **Session handoff:** `HANDOFF.md` — the context from the design conversation, the
   decisions made, and the environment facts.
-- **Status:** the design is approved and builder-reviewed; the next step is the
-  implementation plan. **Nothing is scaffolded yet.**
+- **Status:** the design is approved (2026-10-12) and the data-model implementation plan is
+  written: `docs/superpowers/plans/2026-10-12-musai-data-model.md`. **Nothing is scaffolded
+  yet.**
 
 ## Working conventions
 

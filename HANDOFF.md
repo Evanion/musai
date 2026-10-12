@@ -13,8 +13,9 @@ session can continue without it.
   `docs/superpowers/specs/2026-10-12-musai-design.md`.
 - A fresh builder reviewed it; its questions were answered and folded in. **One round,
   no open review questions.**
-- **Next step:** write the implementation plan (`superpowers:writing-plans`), then build.
-  **Nothing is scaffolded yet.**
+- **Next step:** execute `docs/superpowers/plans/2026-10-12-musai-data-model.md` from its
+  Task 1, then write the plans for the later build-order steps. **Nothing is scaffolded
+  yet.**
 
 ## What Musai is
 
@@ -80,8 +81,9 @@ contextual token-budgeted injection; the build order; anti-goals as testable bud
 
 ## First thing a new session should do
 
-Read `docs/superpowers/specs/2026-10-12-musai-design.md` (approved). Write the
-implementation plan with `superpowers:writing-plans`.
+Read `docs/superpowers/specs/2026-10-12-musai-design.md` (approved) and
+`docs/superpowers/plans/2026-10-12-musai-data-model.md`, then execute the plan from Task 1
+with `superpowers:subagent-driven-development` or `superpowers:executing-plans`.
 
 ## Appendix — what claude-mem does today (the replacement surface)
 
