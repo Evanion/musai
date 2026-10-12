@@ -1,0 +1,22 @@
+fragment SpecBits on Spec {
+  id
+  title
+  kind
+  body
+  position
+  createdAt
+  project { slug }
+  plans { id title }
+}
+
+query SpecsForProject($slug: String!) {
+  specs(where: {project: {slug: {eq: $slug}}}, orderBy: [{position: ASC}, {createdAt: ASC}]) { ...SpecBits }
+}
+
+mutation CreateSpec($title: String!, $kind: SpecKind!, $body: String, $position: Int, $slug: String!) {
+  createSpec(input: {title: $title, kind: $kind, body: $body, position: $position, project: {connect: {slug: $slug}}}) { id }
+}
+
+mutation SetSpecBody($id: ID!, $body: String!) {
+  updateSpec(by: {id: $id}, set: {body: {set: $body}}) { id }
+}

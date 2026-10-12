@@ -1,0 +1,23 @@
+fragment IdeaBits on Idea {
+  id
+  title
+  body
+  status
+  createdAt
+  project { slug }
+  spawnedProject { slug }
+}
+
+query AllIdeas { ideas(orderBy: [{createdAt: ASC}]) { ...IdeaBits } }
+
+query IdeasForProject($slug: String!) {
+  ideas(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: ASC}]) { ...IdeaBits }
+}
+
+mutation CreateIdea($title: String!, $body: String, $slug: String!) {
+  createIdea(input: {title: $title, body: $body, status: OPEN, project: {connect: {slug: $slug}}}) { id }
+}
+
+mutation PromoteIdea($id: ID!, $project: ID!) {
+  updateIdea(by: {id: $id}, set: {status: {set: PROMOTED}, spawnedProject: {connect: {id: $project}}}) { id status }
+}

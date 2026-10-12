@@ -1,0 +1,26 @@
+fragment TaskBits on Task {
+  id
+  title
+  detail
+  status
+  position
+  createdAt
+  project { slug }
+  plan { id title }
+}
+
+query TasksForPlan($plan: ID!) {
+  tasks(where: {plan: {id: {eq: $plan}}}, orderBy: [{position: ASC}, {createdAt: ASC}]) { ...TaskBits }
+}
+
+query TasksForProjectByStatus($slug: String!, $status: TaskStatus!) {
+  tasks(where: {project: {slug: {eq: $slug}}, status: {eq: $status}}, orderBy: [{position: ASC}]) { ...TaskBits }
+}
+
+mutation CreateTask($title: String!, $detail: String, $position: Int, $plan: ID!, $slug: String!) {
+  createTask(input: {title: $title, detail: $detail, status: TODO, position: $position, project: {connect: {slug: $slug}}, plan: {connect: {id: $plan}}}) { id }
+}
+
+mutation SetTaskStatus($id: ID!, $status: TaskStatus!) {
+  updateTask(by: {id: $id}, set: {status: {set: $status}}) { id status }
+}

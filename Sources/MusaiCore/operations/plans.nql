@@ -1,0 +1,29 @@
+fragment PlanBits on Plan {
+  id
+  title
+  body
+  status
+  createdAt
+  project { slug }
+  spec { id title }
+}
+
+query PlansForProject($slug: String!) {
+  plans(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: ASC}]) { ...PlanBits }
+}
+
+mutation CreatePlan($title: String!, $body: String, $slug: String!) {
+  createPlan(input: {title: $title, body: $body, status: DRAFT, project: {connect: {slug: $slug}}}) { id }
+}
+
+mutation LinkPlanToSpec($plan: ID!, $spec: ID!) {
+  updatePlan(by: {id: $plan}, set: {spec: {connect: {id: $spec}}}) { id }
+}
+
+mutation SetPlanStatus($id: ID!, $status: PlanStatus!) {
+  updatePlan(by: {id: $id}, set: {status: {set: $status}}) { id status }
+}
+
+mutation DeletePlan($id: ID!) {
+  deletePlan(by: {id: $id})
+}
