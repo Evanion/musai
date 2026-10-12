@@ -1,0 +1,38 @@
+fragment SessionBits on Session {
+  id
+  memorySessionId
+  platform
+  cwd
+  title
+  status
+  startedAt
+  endedAt
+}
+
+query ProjectByRemote($remote: String!) {
+  projects(where: {repoRemote: {eq: $remote}}, first: 1) { id slug name }
+}
+
+query ProjectByRoot($root: String!) {
+  projects(where: {rootPath: {eq: $root}}, first: 1) { id slug name }
+}
+
+query SessionByMemoryId($memorySessionId: String!) {
+  session(by: {memorySessionId: $memorySessionId}) { ...SessionBits }
+}
+
+mutation UpsertSession($memorySessionId: String!, $platform: String!, $cwd: String, $title: String, $startedAt: DateTime!, $slug: String!) {
+  upsertSession(by: {memorySessionId: $memorySessionId}, input: {
+    memorySessionId: $memorySessionId
+    platform: $platform
+    cwd: $cwd
+    title: $title
+    status: ACTIVE
+    startedAt: $startedAt
+    project: {connect: {slug: $slug}}
+  }) { id }
+}
+
+mutation EndSession($memorySessionId: String!, $status: SessionStatus!, $endedAt: DateTime!) {
+  updateSession(by: {memorySessionId: $memorySessionId}, set: {status: {set: $status}, endedAt: {set: $endedAt}}) { id status }
+}
