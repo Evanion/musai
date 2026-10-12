@@ -168,7 +168,7 @@ git commit -m "feat: the CLI is a client, and the host adapters stay in the CLI"
 
 ---
 
-### Task 4: The drain, per project, and never on the request path
+### Task 4: The drain, per project, off the request path, and a queue that expires itself
 
 **Files:**
 - Modify: `Sources/MusaiCore/operations/fragments.nql` (`EventBits` gains `session { project { slug } }`)
@@ -185,6 +185,8 @@ In `CuratorTests`: **`theDrainFilesEachEventUnderItsOwnProject`** — two projec
 
 In `EndpointTests`: **`aCaptureDuringAModelCallReturnsAtOnce`** — a detector that sleeps until a test releases it, a `drainNow()` started, then a `POST /capture`; assert the capture returns `created` while the drain is still running, and that the backlog grew rather than the request waiting. And **`theDebounceCollapsesABurst`** — five `noteCapture()` calls within the injected window drive one drain.
 
+And for the queue's own retention: **`anEventOlderThanTheRetentionWindowIsGone`** — record an event whose `at` is 40 days ago and one from now, drain, and assert only the recent one is ever returned (the queued row is gone, not merely undrained).
+
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `swift test --filter "CuratorTests|EndpointTests"`
@@ -192,7 +194,16 @@ Expected: FAIL — `extra argument 'project'` / missing `drainCount`.
 
 - [ ] **Step 3: Write the change**
 
-The curator groups `UndrainedEvents` by the event's session's project, calls the detector per group (its prompt says "one working session"), writes each proposal with its own project, and marks every event drained at the end. A detector that throws still leaves everything undone.
+The curator groups `UndrainedEvents` by the event's session's project, calls the detector per group (its prompt says "one working session"), then writes the proposals **and marks their events drained in one `db.transaction`** — a crash can neither double-file a decision nor half-file it, and the model call stays outside the transaction so it never holds the writer. A detector that throws still leaves everything undone.
+
+The queue also expires itself, which is the design's §6.2 requirement and the last review's deferred I5: add
+`@partition(by: at, every: 1d, keep: 30d)` to `Event` in a `0004_event_expiry.nql` migration. Partitioning is
+the engine's own mechanism — expiring a period drops its keyspaces in one pass rather than deleting rows — and
+`Event` is the only type it should apply to: the durable `Utterance` and every curated object must never expire.
+
+*If the engine refuses `@partition` on a type that already has rows, the fallback is the one the design names:
+a `deleteDrainedEvents(before:)` mutation and a pass that runs it no more often than once a day. The step is to
+try the partitioned form first and find out, not to guess.*
 
 - [ ] **Step 4: Run them to verify they pass**
 
