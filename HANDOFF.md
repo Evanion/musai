@@ -13,9 +13,9 @@ session can continue without it.
   `docs/superpowers/specs/2026-10-12-musai-design.md`.
 - A fresh builder reviewed it; its questions were answered and folded in. **One round,
   no open review questions.**
-- **Next step:** execute `docs/superpowers/plans/2026-10-12-musai-data-model.md` from its
-  Task 1, then write the plans for the later build-order steps. **Nothing is scaffolded
-  yet.**
+- **Next step:** plan and build the claude-mem import (`§16.1`'s second half — it inherits the ruling that an
+  upsert by slug alone could reset a Project's status), then the ingestion queue, host abstraction, MCP server
+  and hooks (`§16.2`). The data model is built and merged.
 
 ## What Musai is
 
@@ -81,9 +81,10 @@ contextual token-budgeted injection; the build order; anti-goals as testable bud
 
 ## First thing a new session should do
 
-Read `docs/superpowers/specs/2026-10-12-musai-design.md` (approved) and
-`docs/superpowers/plans/2026-10-12-musai-data-model.md`, then execute the plan from Task 1
-with `superpowers:subagent-driven-development` or `superpowers:executing-plans`.
+The data model is built and merged (`MusaiCore`, 27 tests). Read
+`docs/superpowers/specs/2026-10-12-musai-design.md` (approved) and
+`docs/superpowers/plans/2026-10-12-musai-data-model.md` (executed), then plan the claude-mem import —
+`§16.1`'s second half, and the next slice in build order — with `superpowers:writing-plans`.
 
 ## Appendix — what claude-mem does today (the replacement surface)
 

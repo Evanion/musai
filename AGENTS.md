@@ -11,9 +11,10 @@ package).
 - **Design:** `docs/superpowers/specs/2026-10-12-musai-design.md` — **approved 2026-10-12**.
 - **Session handoff:** `HANDOFF.md` — the context from the design conversation, the
   decisions made, and the environment facts.
-- **Status:** the design is approved (2026-10-12) and the data-model implementation plan is
-  written: `docs/superpowers/plans/2026-10-12-musai-data-model.md`. **Nothing is scaffolded
-  yet.**
+- **Status:** the design is approved (2026-10-12) and the data-model plan
+  (`docs/superpowers/plans/2026-10-12-musai-data-model.md`) is **built and merged**: `MusaiCore` holds the
+  project graph on Norvo Lite — schema, operations, `MusaiLibrary`, `ProjectBinder` — with 27 tests green.
+  Next in build order (`§16.2`): the claude-mem import, then the ingestion queue and the host abstraction.
 
 ## Working conventions
 
