@@ -71,9 +71,14 @@ Sharpened or added here:
 - **A hook's timeout is short and its failure is silent-but-logged.** A client that cannot reach the backend
   exits 0 with one diagnostic line; it never blocks the host past its own hook timeout (which is why the
   helper's own model timeout is shorter still).
-- **The backend is not the UI process.** Two bundles: the helper as a menu-bar agent (`LSUIElement`) that
-  owns the store, and the window app as its client. A UI bug or a rebuild cannot take capture down, and the
-  only coupling between them is the endpoint.
+- **One bundle, two processes.** `Musai.app` holds both the window app and the menu-bar agent, as a nested
+  `Contents/Library/LoginItems/MusaiAgent.app` with its own `Info.plist` and `LSUIElement`. They ship together,
+  so they cannot drift apart in version, but they run separately, so a UI bug or a window rebuild cannot take
+  capture down. Their only coupling is the endpoint.
+- **If the agent is not running, the app starts it.** Opening the app is the one moment a person is certainly
+  present and certainly wants memory to work, so the app ensures the backend before it shows anything:
+  `/health`, and on no answer, launchd, then a clear "backend not running" state with a repair action rather
+  than a silent empty screen.
 - **Not running is not the same as lost.** The helper is always on, so a client finding it down is a fault to
   repair rather than a normal state: the client asks launchd to start it and retries briefly. A capture is lost
   only when the helper cannot start at all — the store unopenable, or the agent quit — which is a state the
@@ -89,7 +94,8 @@ Sharpened or added here:
 | --- | --- | --- |
 | The store, capture and curator | `MusaiCore` (built) | Unchanged in behaviour. Now called only by the helper. |
 | The endpoint | `MusaiCore` (new: `MusaiEndpoint`) | A small router over the existing types: payload in, outcome out. In the library so the protocol is testable without a GUI or a launch agent. |
-| The helper | new executable (`musai-helper`) | Opens the store once, listens, shows a menu-bar item, runs the curator. Thin: no protocol logic of its own. |
+| The agent | `MusaiAgent`, nested in `Musai.app` | Opens the store once, listens, shows a menu-bar item, runs the curator. Thin: no protocol logic of its own. |
+| The window app | `Musai`, `Musai.app`'s main executable (a later slice) | The workspace, viewer and control panel, as a client of the endpoint. |
 | The CLI | `musai` (exists) | Becomes a client. `hook` posts; `review` reads and writes over the endpoint; `install --helper` registers the launch agent. |
 
 The split follows the last slice's rule, learned the hard way: **anything a test must prove lives in
@@ -123,15 +129,26 @@ protocol work with no user-visible gain while a stdio shim already reaches every
 
 ## 8. Lifecycle
 
-- **Registration, as an app bundle.** `musai install --helper [--library <path>]` assembles
-  `Application Support/Musai/MusaiHelper.app` — `Contents/Info.plist` (`LSUIElement = true`, a version, an
-  identifier), `Contents/MacOS/MusaiHelper`, and its resources — from the built binary and an `Info.plist`
-  kept in the repository, because SwiftPM cannot produce an `.app` itself. It then writes
-  `~/Library/LaunchAgents/dev.musai.helper.plist` with `RunAtLoad` and `KeepAlive`, pointing `Program` at the
-  bundle's `Contents/MacOS/MusaiHelper`, and loads it. `--uninstall` takes it and the hooks away.
-  A bundle rather than a bare binary for three reasons: the window app needs one anyway, so the build and
-  install path is shared; `LSUIElement` gives a real menu-bar agent with no Dock icon; and a stable bundle in
-  Application Support survives `.build` being wiped.
+- **Registration, as one app bundle.** `musai install [--library <path>]` assembles `~/Applications/Musai.app`
+  from the built executables and the `Info.plist`s kept in the repository, because SwiftPM cannot produce an
+  `.app` itself:
+
+  ```
+  Musai.app/Contents/
+    Info.plist                                  the window app
+    MacOS/Musai                                 the window app
+    Library/LoginItems/MusaiAgent.app/          the menu-bar agent
+      Contents/Info.plist                       LSUIElement = true
+      Contents/MacOS/MusaiAgent
+  ```
+
+  It then writes `~/Library/LaunchAgents/dev.musai.agent.plist` with `RunAtLoad` and `KeepAlive`, pointing
+  `Program` at the nested agent, and loads it. `--uninstall` takes the agent, the hooks and the bundle away.
+
+  `~/Applications` rather than `/Applications` so no elevation is needed, and a stable path because the plist
+  names the agent inside the bundle: **moving or deleting the bundle breaks the registration**, which the
+  install and `musai doctor` both say out loud. During development the bundle is assembled into `.build/` and
+  `musai` can run the agent from there; only `install` writes to `~/Applications`.
 - **One store.** The helper serves exactly the store it was started with. `--library`/`MUSAI_LIBRARY` still
   choose it at install time; a client that points somewhere else reads the store path in `/health` and says so,
   rather than writing where it was not expected.
@@ -145,6 +162,10 @@ protocol work with no user-visible gain while a stdio shim already reaches every
   lost only when the helper cannot start at all, which the person can see and fix.
 - **Idle.** No timer unless there are undrained events. The drain is debounced (never more than once every few
   seconds) and always off the request path, so a slow model never delays a capture.
+- **The app ensures the agent.** On launch the app reads `helper.json` and asks `/health`; if nothing answers
+  it starts the agent through launchd and waits briefly, because the person opening the app is the one moment
+  memory must work. If that fails it shows the backend's state and offers a repair, rather than an empty
+  workspace that looks like lost data.
 - **The drain resolves each event's project from its session.** The queue is global and a hook's `cwd` no
   longer supplies context, so `UndrainedEvents` stops taking a project and each event's session supplies it,
   with proposals filed per project. This is the previous review's I3, which this slice makes mandatory rather
@@ -208,11 +229,14 @@ protocol work with no user-visible gain while a stdio shim already reaches every
 - **Quit boots the agent out**, because `KeepAlive` would otherwise undo it immediately.
 - **The protocol version is `major.minor`**: a major mismatch is refused and reported; a minor one is assumed
   additive.
-- **An `.app` bundle for the helper, assembled at install time**, and a second one for the window app when it
-  comes, rather than a bare executable — the person's call, 2026-10-13: *"I would prefer an app-bundle, we will
-  need one for the app itself anyhow."* Two bundles rather than one app with two faces, because the taskbar
-  tool and the window app were named as two things, and the backend should not depend on the UI process's
-  health.
+- **One `.app` bundle holding both processes**, assembled at install time, rather than a bare executable or
+  two separate bundles — the person's call, 2026-10-13: *"I would prefer them to be one bundle, but separate
+  processes, and if you start the app without the taskbar tool, the app launches the taskbar tool."* One bundle
+  means the agent and the app can never drift in version and the build path is shared; separate processes mean
+  the backend does not depend on the UI process's health; and the app starting the agent puts the recovery in
+  the one place a person is certain to be. The agent is a nested `.app` rather than a second bare executable in
+  `Contents/MacOS`, so it gets its own `Info.plist` and `LSUIElement` instead of relying on a runtime activation
+  policy.
 - **The helper's log is a named file** plus `musai doctor`, because the last slice's worst property was
   silence.
 - **The curator drains off the request path, debounced, with no timer when idle.**
