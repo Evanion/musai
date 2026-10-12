@@ -68,8 +68,9 @@ participation is limited to a confirmation they can give in one keystroke.
 
 ## 2. Goals
 
-1. **Capture both sides** of a session's exchange — the user's turns verbatim, the agent's summarized —
-   automatically, with no co-operation from the agent and none from the user.
+1. **Capture both sides** of a session's exchange — the user's turns verbatim, the agent's summarised but
+   kept — automatically, with no co-operation from the agent and none from the user, and never the agent's
+   tool output.
 2. **Propose decisions** from that exchange: in the user's words, with the user as the actor, and with a
    pointer back to the event they came from.
 3. **Confirm cheaply** — one keystroke to confirm, correct or drop a proposal.
@@ -97,6 +98,8 @@ A version that technically works but is:
   clerk work by another name, so precision matters far more than recall.
 - **as expensive as the problem.** The handover must cost far fewer tokens than the agent would spend
   re-deriving the understanding it replaces. A dump of N observations costs the same as the problem.
+- **bloated by the agent's own output.** The code it writes and the commands it runs belong in the
+  repository. Capturing them is both wasteful and how a store like this explodes.
 - **in the way.** No blocking the agent, no waiting on a model before it can act.
 
 ## 5. Constraints
@@ -121,6 +124,10 @@ Added or sharpened here:
   resources allow, like the curator.
 - **The user's words are stored verbatim.** Storing is cheap; selecting is where the budget goes. A
   paraphrase is where the intent is already lost, so the user's turn is never rewritten.
+- **Tool output is never captured.** The code an agent writes and the output of the commands it runs are not
+  memory; they live in the repository and in version control, which is where they belong. A tool event records
+  the tool, its target and a hash — never its payload — and every captured event has a hard size cap. A store
+  that grows with the code the agent generates is the failure this constraint exists to prevent.
 
 ## 6. The model changes this forces
 
@@ -133,15 +140,20 @@ first two carry decisions made here.
    deserves its own axis, because the NexusDI correction in §1 is exactly that confusion and a single act
    kind may not separate them. `MemoryKind.DECISION` is retired, so a decision has one home and the overlap
    between `Decision` and a decision-kind `Memory` disappears.
-2. **The exchange, in two tiers.** The user's side is the durable one:
-   - **`Utterance`** — every user turn, verbatim, with the user as its *speaker* (a field, not Norvo's
-     `createdBy`, because the curator is the one writing it). It links to its session and to any decision it
-     produced. Small, and never expires: this is the record of intent, and intent must outlive a month.
-   - **`Event`** — the raw stream the hooks see: the agent's turns, tool use, whatever the loop cannot yet
-     know the value of. This is the queue, kept about 30 days with cheap expiry, as the main design already
-     requires.
-   Detection reads `Event`; what it promotes survives as an `Utterance`, a `Memory` or a `Decision`. Both
-   tiers are committed before the hook returns.
+2. **The exchange, in two tiers — and both sides persist.** The queue is not the memory.
+   - **The durable layer** holds both sides of the conversation, and nothing in it expires:
+     - **`Utterance`** — every user turn, verbatim, with the user as its *speaker* (a field, not Norvo's
+       `createdBy`, because the curator is the one writing it). It links to its session and to any decision it
+       produced. Small, and the record of intent.
+     - **`Memory`** — what the agent's side is worth as memory: what it did, decided or learned, with the
+       rationale, curated rather than verbatim, with the agent as its actor. **This is where the agent's
+       responses persist.** They must not expire.
+   - **The expiring tier is the raw queue the hooks write, as `Event` rows** — the turn text as it arrived (the
+     agent's turns truncated) and tool-use *references*: the tool, its target, a hash. Never a tool's output.
+     About 30 days with cheap expiry, as the main design already requires. Its only job is to still be there
+     when the curator gets to it.
+   Detection reads the expiring tier; whatever it judges worth keeping survives in the durable layer. So
+   nothing on the agent's side is lost — only its redundancy is, and the code it wrote was never here.
 3. **Artifacts as things.** A mock, a screenshot, a document, a file. The mitt-coop correction in §1 is a
    memory pointing at something that no longer existed in the conversation, and today `Memory.provenance` is
    a string that cannot be linked, filtered or injected. An artifact is an entity that a memory, a decision
