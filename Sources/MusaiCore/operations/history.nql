@@ -1,0 +1,23 @@
+query SpecHistory($id: ID!, $first: Int = 50) {
+  spec(by: {id: $id}) {
+    history(first: $first) {
+      edges { node { at actor { name } kind fields { body { old new } } } }
+    }
+  }
+}
+
+query MemoryHistory($id: ID!, $first: Int = 50) {
+  memory(by: {id: $id}) {
+    history(first: $first) {
+      edges { node { at actor { name } kind fields { text { old new } origin { old new } } } }
+    }
+  }
+}
+
+query DeletedMemories($first: Int = 10) {
+  deletedMemories(first: $first) { id at }
+}
+
+mutation RestoreMemory($id: ID!) {
+  restoreMemory(id: $id) { id text }
+}
