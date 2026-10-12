@@ -56,7 +56,13 @@ struct MusaiHook {
     /// is still accepted for the command's documented spelling, but it is no longer required — this is the whole
     /// install by default.
     static func install(arguments: [String], library: URL?) {
-        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        // Our own path as the loader resolved it, not the invocation string: under a PATH lookup `argv[0]` is a
+        // bare name, and deriving an install from it would look for the agent and the plists in whichever
+        // directory the shell happened to be in.
+        guard let executable = Bundle.main.executableURL?.standardizedFileURL else {
+            diagnose("cannot find my own executable; run this from the checkout you built")
+            return
+        }
         let built = executable.deletingLastPathComponent()
         let agent = built.appending(path: "musai-agent")
         guard let resources = repositoryResources(from: executable) else {
