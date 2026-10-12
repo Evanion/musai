@@ -13,12 +13,13 @@ session can continue without it.
   `docs/superpowers/specs/2026-10-12-musai-design.md`.
 - A fresh builder reviewed it; its questions were answered and folded in. **One round,
   no open review questions.**
-- **Next step:** execute `docs/superpowers/plans/2026-10-12-musai-decision-loop.md` (the decision loop, Claude
-  Code first). Its design, `docs/superpowers/specs/2026-10-12-musai-decision-loop-design.md`, fixes the build
-  order from here: the **loop**, then the claude-mem **migration** (evidence that seeds the graph, reusing the
-  loop's confirmation surface), then one reader per source for Obsidian, graphify and the wiki. It also amends
-  the main design's §3 non-goal (Musai now absorbs notes) and §9's authoring mechanism (capturing a decision is
-  Musai's machinery, because an agent focused on its task will skip clerk work).
+- **Next step:** design and build the **backend**. Its three tiers, agreed 2026-10-12: the host **hooks are thin
+  proxies**, the **menu-bar helper is the backend** (it owns the Norvo Lite file, runs the curator's model and
+  will run the closed-loop dispatcher, and serves a loopback endpoint and MCP), and the **window app is the
+  first front-end client** — with the agents themselves as a second client class through MCP. This is the main
+  design's §10; it is also what closes PR #1's Critical, because then no hook ever opens the file. Only after
+  that does the branch's slice become safe to install, and the claude-mem **migration** follows it (evidence
+  that seeds the graph, reusing the loop's confirmation surface).
 
 ## What Musai is
 

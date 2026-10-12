@@ -11,13 +11,16 @@ package).
 - **Design:** `docs/superpowers/specs/2026-10-12-musai-design.md` — **approved 2026-10-12**.
 - **Session handoff:** `HANDOFF.md` — the context from the design conversation, the
   decisions made, and the environment facts.
-- **Status:** the design is approved (2026-10-12), the data model is **built and merged** (`MusaiCore`, 27 tests),
-  and the next slice is designed and planned: the decision loop —
-  `docs/superpowers/specs/2026-10-12-musai-decision-loop-design.md` and
-  `docs/superpowers/plans/2026-10-12-musai-decision-loop.md` (10 tasks, Claude Code first).
-  That design amends the main design's §3 non-goal and §9 authoring mechanism, and it reorders the build:
-  the loop comes before the claude-mem **migration**, which is evidence that seeds the graph rather than a
-  row import.
+- **Status:** built and merged on `main`: the data model (`MusaiCore`, the project graph) and the **decision
+  loop's first slice** — capture, detection, one-keystroke confirmation and the bounded handover
+  (`docs/superpowers/plans/2026-10-12-musai-decision-loop.md`, PR #1, 66 tests).
+  **Do not install it into a live session yet:** `musai install --claude-code` runs hooks that each open the
+  store, and Norvo Lite allows one open per file, so a concurrent hook silently loses a turn until the
+  **backend** (below) owns the file. See the PR for the full known-issues list.
+- **Next slice:** the **backend** — a menu-bar helper that owns the Norvo Lite file, runs the curator and serves
+  a loopback endpoint and MCP, with the hooks reduced to thin adapters and the app as its first client. That is
+  what closes the above, and it is what the main design's §10 already specifies. Then the claude-mem
+  **migration** (evidence that seeds the graph, not a row import).
 
 ## Working conventions
 
