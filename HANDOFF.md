@@ -9,12 +9,12 @@ session can continue without it.
 - **Musai is named.** The name is from Greek *Mousai*, the **Muses** — the sparks of
   imagination. Repo: `github.com/Evanion/musai` (personal account, deliberately separate
   from `NorvoDB`).
-- **The design is written:** `docs/superpowers/specs/2026-10-12-musai-design.md`. It is a
-  **draft awaiting the user's approval**.
+- **The design is approved** (2026-10-12):
+  `docs/superpowers/specs/2026-10-12-musai-design.md`.
 - A fresh builder reviewed it; its questions were answered and folded in. **One round,
   no open review questions.**
-- **Next step:** on approval — commit the spec, then write the implementation plan
-  (`superpowers:writing-plans`), then build. **Nothing is scaffolded yet.**
+- **Next step:** write the implementation plan (`superpowers:writing-plans`), then build.
+  **Nothing is scaffolded yet.**
 
 ## What Musai is
 
@@ -74,15 +74,14 @@ contextual token-budgeted injection; the build order; anti-goals as testable bud
 
 ## Open items
 
-- **Approve the design** — the gate before any planning or scaffolding.
 - Pin the curator and embedder **model names** at plan time (they move fast).
 - Decide the **export format** into SDD tools (Spec Kit, Kiro-style).
 - Confirm the sequencing of closed-loop automation (after v1).
 
 ## First thing a new session should do
 
-Read `docs/superpowers/specs/2026-10-12-musai-design.md`; confirm with the user whether it
-is approved. On approval: commit the spec and begin the plan.
+Read `docs/superpowers/specs/2026-10-12-musai-design.md` (approved). Write the
+implementation plan with `superpowers:writing-plans`.
 
 ## Appendix — what claude-mem does today (the replacement surface)
 

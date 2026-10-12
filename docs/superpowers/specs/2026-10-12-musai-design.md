@@ -1,7 +1,7 @@
 # Musai: design
 
 Date: 2026-10-12
-Status: draft — pending the user's approval
+Status: approved 2026-10-12
 Builds on: `NorvoDB` — `docs/superpowers/specs/2026-10-04-norvo-lite-prototype-design.md`
 (the app the Lite spec requires but defers) and `2026-10-08-swift-package-design.md`
 (how an app embeds Lite). Those cover what the app requires *from* Lite; this covers

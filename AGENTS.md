@@ -8,12 +8,11 @@ package).
 
 ## Start here
 
-- **Design:** `docs/superpowers/specs/2026-10-12-musai-design.md` — draft, awaiting the
-  user's approval.
+- **Design:** `docs/superpowers/specs/2026-10-12-musai-design.md` — **approved 2026-10-12**.
 - **Session handoff:** `HANDOFF.md` — the context from the design conversation, the
   decisions made, and the environment facts.
-- **Status:** the design is written and builder-reviewed; the next step is approval, then
-  a plan. **Nothing is scaffolded yet.**
+- **Status:** the design is approved and builder-reviewed; the next step is the
+  implementation plan. **Nothing is scaffolded yet.**
 
 ## Working conventions
 
