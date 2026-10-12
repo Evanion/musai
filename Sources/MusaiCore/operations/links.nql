@@ -1,0 +1,27 @@
+fragment LinkBits on Link {
+  id
+  kind
+  createdAt
+  source { id }
+  target { id }
+}
+
+query OutgoingLinks($id: ID!) {
+  links(where: {source: {id: {eq: $id}}}) { ...LinkBits }
+}
+
+query IncomingLinks($id: ID!) {
+  links(where: {target: {id: {eq: $id}}}) { ...LinkBits }
+}
+
+query LinksOfKind($kind: LinkKind!) {
+  links(where: {kind: {eq: $kind}}) { ...LinkBits }
+}
+
+mutation CreateLink($source: ID!, $target: ID!, $kind: LinkKind!) {
+  createLink(input: {source: {connect: {id: $source}}, target: {connect: {id: $target}}, kind: $kind}) { id }
+}
+
+mutation DeleteLink($id: ID!) {
+  deleteLink(by: {id: $id})
+}
