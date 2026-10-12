@@ -1,0 +1,20 @@
+fragment DecisionBits on Decision {
+  id
+  title
+  rationale
+  createdAt
+  project { slug }
+  subject { id }
+}
+
+query DecisionsForProject($slug: String!) {
+  decisions(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: DESC}]) { ...DecisionBits }
+}
+
+mutation RecordDecision($title: String!, $rationale: String, $slug: String!) {
+  createDecision(input: {title: $title, rationale: $rationale, project: {connect: {slug: $slug}}}) { id }
+}
+
+mutation AttachDecisionToSubject($id: ID!, $subject: ID!) {
+  updateDecision(by: {id: $id}, set: {subject: {connect: {id: $subject}}}) { id }
+}

@@ -1,0 +1,57 @@
+fragment MemoryBits on Memory {
+  id
+  kind
+  origin
+  text
+  narrative
+  concepts
+  provenance
+  createdAt
+  project { slug }
+  session { id memorySessionId }
+  subject { id }
+}
+
+query MemoriesForProject($slug: String!) {
+  memories(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: DESC}]) { ...MemoryBits }
+}
+
+query MemoriesOfKind($kind: MemoryKind!) {
+  memories(where: {kind: {eq: $kind}}, orderBy: [{createdAt: DESC}]) { ...MemoryBits }
+}
+
+query MemoryByProvenance($provenance: String!) {
+  memories(where: {provenance: {eq: $provenance}}, first: 1) { ...MemoryBits }
+}
+
+query MemoryByID($id: ID!) {
+  memory(by: {id: $id}) { ...MemoryBits embedding }
+}
+
+mutation RecordMemory($kind: MemoryKind!, $origin: MemoryOrigin!, $text: String, $narrative: String, $concepts: [String!], $provenance: String, $slug: String!) {
+  createMemory(input: {
+    kind: $kind
+    origin: $origin
+    text: $text
+    narrative: $narrative
+    concepts: $concepts
+    provenance: $provenance
+    project: {connect: {slug: $slug}}
+  }) { id }
+}
+
+mutation AttachMemoryToSubject($id: ID!, $subject: ID!) {
+  updateMemory(by: {id: $id}, set: {subject: {connect: {id: $subject}}}) { id }
+}
+
+mutation SetMemorySession($id: ID!, $memorySessionId: String!) {
+  updateMemory(by: {id: $id}, set: {session: {connect: {memorySessionId: $memorySessionId}}}) { id }
+}
+
+mutation EmbedMemory($id: ID!, $embedding: Vector!) {
+  updateMemory(by: {id: $id}, set: {embedding: {set: $embedding}}) { id }
+}
+
+mutation DeleteMemory($id: ID!) {
+  deleteMemory(by: {id: $id})
+}
