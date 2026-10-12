@@ -28,4 +28,5 @@ fragment EventBits on Event {
   digest
   at
   drained
+  session { id memorySessionId }
 }

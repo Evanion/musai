@@ -18,16 +18,27 @@ public struct MusaiCapture: Sendable {
         try await bind(session: session, cwd: cwd, origin: origin, at: at, as: actor)
         let capped = Self.truncated(text, to: Self.maxTextBytes)
         let rows = try await db.query(UtterancesForSessionQuery(.init(session: session))).utterances
+        let utterance: UUID
         if let found = rows.first(where: {
             $0.speaker == .user && $0.text == capped && Self.sameInstant($0.at, at)
         }) {
-            return found.id
+            utterance = found.id
+        } else {
+            utterance = try await db.mutate(
+                RecordUtteranceMutation(
+                    .init(text: capped, at: at, speaker: .user, origin: origin, session: session)),
+                as: actor).createUtterance.id
         }
-        let made = try await db.mutate(
-            RecordUtteranceMutation(
-                .init(text: capped, at: at, speaker: .user, origin: origin, session: session)),
-            as: actor)
-        return made.createUtterance.id
+        // The queue holds the exchange in order, so the user's turn is there too — and its durable copy is the
+        // row a proposal links to, which is why it is written first.
+        let queued = try await db.query(EventsForSessionQuery(.init(session: session))).events
+        if !queued.contains(where: {
+            $0.kind == .userTurn && $0.text == capped && Self.sameInstant($0.at, at)
+        }) {
+            _ = try await db.mutate(
+                RecordEventMutation(.init(kind: .userTurn, at: at, text: capped, session: session)), as: actor)
+        }
+        return utterance
     }
 
     /// The agent's own account of its turn. Kept as an `Event`; the curator decides how much of it survives.
