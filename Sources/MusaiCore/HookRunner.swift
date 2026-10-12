@@ -19,8 +19,10 @@ public struct HookOutcome: Sendable, Equatable {
 /// "a hook can never break the host's session" is something a test can prove: `run` never throws — a failure
 /// comes back as a diagnostic.
 public struct HookRunner: Sendable {
-    /// stdin beyond this is ignored: a hook is not a place to read a large file.
-    public static let maxStdinBytes = 1 << 20
+    /// stdin beyond this is refused with a diagnostic. The bound is generous because the payload can carry a
+    /// large paste, and cutting the JSON mid-string would lose the turn entirely; the *text* is capped after it
+    /// parses.
+    public static let maxStdinBytes = 32 << 20
 
     public let capture: MusaiCapture
     public let library: MusaiLibrary
@@ -36,7 +38,8 @@ public struct HookRunner: Sendable {
 
     public func run(event: String?, stdin: Data, cwd: String, at: Date = Date()) async -> HookOutcome {
         do {
-            let payload = try HookPayload.decode(Self.bounded(stdin))
+            guard stdin.count <= Self.maxStdinBytes else { throw HookPayload.Failure.malformed }
+            let payload = try HookPayload.decode(stdin)
             let name = event ?? payload.event
             let cwd = payload.cwd ?? cwd
             let session = payload.sessionId ?? ""
@@ -93,10 +96,6 @@ public struct HookRunner: Sendable {
     static func resolveProvider(_ given: (any ModelProvider)?) -> (any ModelProvider)? {
         if let given { return given }
         return (try? ModelConfiguration.load()).map { OpenAICompatibleProvider(configuration: $0) }
-    }
-
-    static func bounded(_ data: Data) -> Data {
-        data.count > maxStdinBytes ? data.prefix(maxStdinBytes) : data
     }
 
     /// The same tool on the same target twice is one digest, so a retried hook is recognisable without

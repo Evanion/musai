@@ -13,8 +13,9 @@ public enum MusaiInstall {
         func entry(_ event: String, matcher: String?, timeout: Int, background: Bool) -> [String: Any] {
             var hook: [String: Any] = [
                 "type": "command",
-                // `|| true` and the discarded stderr are the promise: a hook can never fail the session.
-                "command": "\(quoted) hook \(event) 2>/dev/null || true",
+                // `|| true` is the promise: a hook can never fail the session. Its diagnostic still reaches
+                // stderr, because a capture that quietly did not happen is the one failure worth hearing about.
+                "command": "\(quoted) hook \(event) || true",
                 "timeout": timeout,
             ]
             if background { hook["async"] = true }

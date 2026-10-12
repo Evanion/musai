@@ -46,10 +46,19 @@ public enum MusaiSlice {
 
     /// The host's own stdout shape for the session-start hook.
     public static func additionalContext(_ text: String) -> String {
-        let escaped = text
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
+        var escaped = ""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "\n": escaped += "\\n"
+            case "\r": escaped += "\\r"
+            case "\t": escaped += "\\t"
+            case let control where control.value < 0x20:
+                escaped += String(format: "\\u%04x", control.value)
+            default: escaped.unicodeScalars.append(scalar)
+            }
+        }
         return #"{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":["\#(escaped)"]}}"#
     }
 

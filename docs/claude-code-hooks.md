@@ -13,7 +13,7 @@ nothing.
 | `PostToolUse` (`*`) | records the tool, its target and a digest — never its result | 120 s, async |
 | `Stop` | records the agent's own last message (text blocks only) and drains the queue through the configured model | 120 s, async |
 
-Every command ends in `2>/dev/null || true`: a hook may never fail the session it is reporting on. A model that
+Every command ends in `|| true`: a hook may never fail the session it is reporting on. A model that
 is down therefore costs nothing — the events stay in the queue and the next drain retries them.
 
 ## Configuration
@@ -26,7 +26,7 @@ is down therefore costs nothing — the events stay in the queue and the next dr
   "kind" : "openAICompatible",
   "maxTokens" : 2048,
   "model" : "qwen3.6:27b",
-  "timeoutSeconds" : 120
+  "timeoutSeconds" : 60
 }
 ```
 

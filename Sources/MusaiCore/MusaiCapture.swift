@@ -6,6 +6,10 @@ import NorvoLite
 public struct MusaiCapture: Sendable {
     /// Over this size a captured text is truncated, never written whole.
     public static let maxTextBytes = 65_536
+    /// The same words within this window are the same turn — a hook that fired twice. Beyond it, two turns:
+    /// "yes" and "yes" five minutes apart are two things the person said, and the second one may settle
+    /// something the first did not.
+    public static let sameTurnWindow: TimeInterval = 10
 
     public let db: Database
     public init(db: Database) { self.db = db }
@@ -19,7 +23,9 @@ public struct MusaiCapture: Sendable {
         let capped = Self.truncated(text, to: Self.maxTextBytes)
         let rows = try await db.query(UtterancesForSessionQuery(.init(session: session))).utterances
         let utterance: UUID
-        if let found = rows.first(where: { $0.speaker == .user && $0.text == capped }) {
+        if let found = rows.first(where: {
+            $0.speaker == .user && $0.text == capped && Self.withinSameTurn($0.at, at)
+        }) {
             utterance = found.id
         } else {
             utterance = try await db.mutate(
@@ -30,7 +36,9 @@ public struct MusaiCapture: Sendable {
         // The queue holds the exchange in order, so the user's turn is there too — and its durable copy is the
         // row a proposal links to, which is why it is written first.
         let queued = try await db.query(EventsForSessionQuery(.init(session: session))).events
-        if !queued.contains(where: { $0.kind == .userTurn && $0.text == capped }) {
+        if !queued.contains(where: {
+            $0.kind == .userTurn && $0.text == capped && Self.withinSameTurn($0.at, at)
+        }) {
             _ = try await db.mutate(
                 RecordEventMutation(.init(kind: .userTurn, at: at, text: capped, session: session)), as: actor)
         }
@@ -44,7 +52,9 @@ public struct MusaiCapture: Sendable {
         try await bind(session: session, cwd: cwd, origin: nil, at: at, as: actor)
         let capped = Self.truncated(text, to: Self.maxTextBytes)
         let rows = try await db.query(EventsForSessionQuery(.init(session: session))).events
-        if rows.contains(where: { $0.kind == .agentTurn && $0.text == capped }) {
+        if rows.contains(where: {
+            $0.kind == .agentTurn && $0.text == capped && Self.withinSameTurn($0.at, at)
+        }) {
             return nil
         }
         let made = try await db.mutate(
@@ -60,7 +70,7 @@ public struct MusaiCapture: Sendable {
         let rows = try await db.query(EventsForSessionQuery(.init(session: session))).events
         if rows.contains(where: {
             $0.kind == .toolUse && $0.tool == tool && $0.target == target && $0.digest == digest
-                && Self.sameInstant($0.at, at)
+                && Self.withinSameTurn($0.at, at)
         }) {
             return
         }
@@ -91,8 +101,8 @@ public struct MusaiCapture: Sendable {
         return out
     }
 
-    /// Norvo stores a `DateTime` to the millisecond, so that is the granularity two captures can be compared at.
-    static func sameInstant(_ lhs: Date, _ rhs: Date) -> Bool {
-        Int((lhs.timeIntervalSince1970 * 1_000).rounded()) == Int((rhs.timeIntervalSince1970 * 1_000).rounded())
+    /// Whether two captures are close enough in time to be the same turn rather than two.
+    static func withinSameTurn(_ lhs: Date, _ rhs: Date) -> Bool {
+        abs(lhs.timeIntervalSince(rhs)) <= sameTurnWindow
     }
 }
