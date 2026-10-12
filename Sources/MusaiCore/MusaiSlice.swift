@@ -12,7 +12,7 @@ public enum MusaiSlice {
         var lines: [String] = []
         let decisions = try await db.query(DecisionsForProjectQuery(.init(slug: project))).decisions
         for decision in decisions {
-            var line = "- \(decision.title) — \(word(decision.act))"
+            var line = "- \(decision.title) — \(decision.act.displayName)"
             if let reference = decision.documentRef { line += ", landed at \(reference)" }
             // A constraint or an example is where the exact wording matters, so it is quoted.
             if (decision.act == .constraint || decision.act == .example), let said = decision.utterance?.text {
@@ -51,18 +51,6 @@ public enum MusaiSlice {
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "\\n")
         return #"{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":["\#(escaped)"]}}"#
-    }
-
-    private static func word(_ act: ActKind) -> String {
-        switch act {
-        case .proposal: return "proposal"
-        case .objection: return "objection"
-        case .example: return "example"
-        case .constraint: return "constraint"
-        case .decision: return "decision"
-        case .question: return "question"
-        case .unknown(let raw): return raw
-        }
     }
 
     private static func oneLine(_ text: String) -> String {

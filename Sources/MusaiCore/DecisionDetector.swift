@@ -41,3 +41,18 @@ public struct DetectedDecision: Sendable, Equatable {
 public protocol DecisionDetector: Sendable {
     func propose(from events: [DetectedEvent]) async throws -> [DetectedDecision]
 }
+
+extension ActKind {
+    /// A word to read, not the SDL's constant.
+    public var displayName: String {
+        switch self {
+        case .proposal: return "proposal"
+        case .objection: return "objection"
+        case .example: return "example"
+        case .constraint: return "constraint"
+        case .decision: return "decision"
+        case .question: return "question"
+        case .unknown(let raw): return raw
+        }
+    }
+}
