@@ -14,7 +14,8 @@ package).
 - **Status:** the design is approved (2026-10-12) and the data-model plan
   (`docs/superpowers/plans/2026-10-12-musai-data-model.md`) is **built and merged**: `MusaiCore` holds the
   project graph on Norvo Lite — schema, operations, `MusaiLibrary`, `ProjectBinder` — with 27 tests green.
-  Next in build order (`§16.2`): the claude-mem import, then the ingestion queue and the host abstraction.
+  Next in build order (`§16.1`'s second half): the **claude-mem migration** — a mapping of claude-mem's
+  structure and data linkage onto Musai's, not a row import.
 
 ## Working conventions
 

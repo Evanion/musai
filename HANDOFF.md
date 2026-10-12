@@ -13,9 +13,17 @@ session can continue without it.
   `docs/superpowers/specs/2026-10-12-musai-design.md`.
 - A fresh builder reviewed it; its questions were answered and folded in. **One round,
   no open review questions.**
-- **Next step:** plan and build the claude-mem import (`§16.1`'s second half — it inherits the ruling that an
-  upsert by slug alone could reset a Project's status), then the ingestion queue, host abstraction, MCP server
-  and hooks (`§16.2`). The data model is built and merged.
+- **Next step:** plan and build the **claude-mem migration** (`§16.1`'s second half). It is not a row import:
+  it maps claude-mem's **structure and data linkage** onto Musai's. Roughly: `sdk_sessions` → `Session` +
+  `Project` (claude-mem keeps `project` as a bare string, with `cwd` and `platform_source`); `observations` →
+  `Memory` carrying its session, project and subject links, `type`/`concepts` → `kind`/`concepts`, and
+  `content_hash`/`occurrence_count`/`merged_into_project` → a link kind; `session_summaries` →
+  `Memory`/`Decision` (Musai has no summary entity — a structure decision); `work_state_entries` → `WorkState`
+  (nearly 1:1); `user_prompts` → undecided. Two mismatches to settle first: claude-mem's embeddings are from a
+  different model than `qwen3-embedding-0.6b`/1024 dims, so they likely cannot carry; and Norvo derives
+  `createdAt` from the entity id, so original timestamps need a field of their own. It also inherits the ruling
+  that an upsert by slug alone could reset a Project's status. Then the ingestion queue, host abstraction, MCP
+  server and hooks (`§16.2`). The data model is built and merged.
 
 ## What Musai is
 
@@ -83,8 +91,9 @@ contextual token-budgeted injection; the build order; anti-goals as testable bud
 
 The data model is built and merged (`MusaiCore`, 27 tests). Read
 `docs/superpowers/specs/2026-10-12-musai-design.md` (approved) and
-`docs/superpowers/plans/2026-10-12-musai-data-model.md` (executed), then plan the claude-mem import —
-`§16.1`'s second half, and the next slice in build order — with `superpowers:writing-plans`.
+`docs/superpowers/plans/2026-10-12-musai-data-model.md` (executed), then work the claude-mem migration —
+`§16.1`'s second half and the next slice in build order. Treat it as a mapping of claude-mem's structure and
+data linkage onto Musai's: the entities and links both sides have, and the ones only one side has.
 
 ## Appendix — what claude-mem does today (the replacement surface)
 
