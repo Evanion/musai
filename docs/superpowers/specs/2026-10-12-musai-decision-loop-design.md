@@ -198,6 +198,12 @@ Order, confirmed: (1) this loop; (2) the claude-mem migration, which is evidence
 than a payload, and reuses this document's confirmation surface to turn one-sided entries into real
 decisions; (3) one reader per source, each its own slice.
 
+**The first slice, agreed:** the loop end to end and narrow — capture, detection and a minimal confirmation
+surface for Claude Code alone, plus the slice handed over when a task starts. OpenCode follows. The point of
+going narrow is to answer the one bet this design rests on — that a local model can propose decisions
+precisely enough that confirming them is not clerk work — before the model changes and the rest of the host
+matrix are built on the answer.
+
 ## 9. What is left to the builder
 
 - The detector's model, prompt, and its precision target; how corrections feed it.
