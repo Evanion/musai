@@ -1,0 +1,17 @@
+query SearchMemories($q: String!, $k: Int = 20, $first: Int = 20) {
+  memoriesConnection(search: {text: {field: text, query: $q}, k: $k}, first: $first) {
+    edges { score node { id kind text project { slug } } }
+  }
+}
+
+query SearchSpecs($q: String!, $first: Int = 20) {
+  specsConnection(search: {text: {field: body, query: $q}}, first: $first) {
+    edges { score node { id title } }
+  }
+}
+
+query NearestMemories($v: Vector!, $k: Int = 20) {
+  memoriesConnection(search: {near: {field: embedding, vector: $v}, k: $k}) {
+    edges { score node { id text } }
+  }
+}
