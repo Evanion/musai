@@ -387,7 +387,7 @@ import Testing
         let rows = try await lib.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
         #expect(rows.count == 2)
         #expect(rows.first?.text == "I said that I want to Read the post")
-        #expect(rows.last?.text?.utf8.count == MusaiCapture.maxTextBytes)
+        #expect(rows.last?.text.utf8.count == MusaiCapture.maxTextBytes)
     }
 
     @Test func aToolUseStoresItsReferenceAndNeverItsResult() async throws {

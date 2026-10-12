@@ -2,6 +2,10 @@ query UtterancesForSession($session: String!) {
   utterances(where: {session: {memorySessionId: {eq: $session}}}, orderBy: [{at: ASC}]) { ...UtteranceBits }
 }
 
+query EventsForSession($session: String!) {
+  events(where: {session: {memorySessionId: {eq: $session}}}, orderBy: [{at: ASC}]) { ...EventBits }
+}
+
 query UndrainedEvents($first: Int = 200) {
   events(where: {drained: {eq: false}}, orderBy: [{createdAt: ASC}], first: $first) { ...EventBits }
 }
