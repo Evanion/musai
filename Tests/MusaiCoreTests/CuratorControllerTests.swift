@@ -70,6 +70,17 @@ private actor Gate {
     func proposalCount() -> Int { proposals }
 }
 
+/// A wall clock a test sets by hand, so a retention sweep's day is driven rather than waited out.
+private final class ClockBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+    init(_ value: Date) { self.value = value }
+    var now: Date {
+        get { lock.lock(); defer { lock.unlock() }; return value }
+        set { lock.lock(); value = newValue; lock.unlock() }
+    }
+}
+
 /// Proposes one decision per event that has a user turn, so proposals are countable.
 private struct GatedDetector: DecisionDetector {
     let gate: Gate
@@ -153,6 +164,56 @@ private struct GatedDetector: DecisionDetector {
         #expect(await gate.proposalCount() == 1)
         let undrained = try await lib.db.query(UndrainedEventsQuery()).events
         #expect(undrained.isEmpty)
+    }
+
+    /// The queue expires itself: a drained event older than the retention window is dropped, not merely
+    /// marked undrained, and a recent one is kept.
+    @Test func anEventOlderThanTheRetentionWindowIsGone() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let capture = MusaiCapture(db: lib.db)
+        _ = try await capture.captureUserTurn(
+            text: "long ago", at: now.addingTimeInterval(-40 * 24 * 60 * 60),
+            origin: "claude", session: "s1", cwd: cwd, as: MusaiActors.curator)
+        _ = try await capture.captureUserTurn(
+            text: "just now", at: now, origin: "claude", session: "s1", cwd: cwd, as: MusaiActors.curator)
+
+        let controller = CuratorController(
+            db: lib.db, detector: SilentDetector(), sleep: { _ in }, debounce: 1, now: { now })
+        _ = try await controller.drainNow()
+
+        let remaining = try await lib.db.query(EventsForSessionQuery(.init(session: "s1"))).events
+        #expect(remaining.map(\.at) == [now])
+        #expect(try await lib.db.query(UndrainedEventsQuery()).events.isEmpty)
+    }
+
+    /// The retention sweep is throttled to one a day; a later drain the same day leaves an aged event be.
+    @Test func theRetentionSweepRunsAtMostOnceADay() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let clock = ClockBox(Date(timeIntervalSince1970: 1_800_000_000))
+        let capture = MusaiCapture(db: lib.db)
+        let controller = CuratorController(
+            db: lib.db, detector: SilentDetector(), sleep: { _ in }, debounce: 1, now: { clock.now })
+
+        _ = try await capture.captureUserTurn(
+            text: "long ago", at: clock.now.addingTimeInterval(-40 * 24 * 60 * 60),
+            origin: "claude", session: "s1", cwd: cwd, as: MusaiActors.curator)
+        _ = try await controller.drainNow()
+        #expect(try await lib.db.query(EventsForSessionQuery(.init(session: "s1"))).events.isEmpty)
+
+        // A second aged event the same day: the sweep is spent, so it is drained but not dropped.
+        _ = try await capture.captureUserTurn(
+            text: "longer ago", at: clock.now.addingTimeInterval(-41 * 24 * 60 * 60),
+            origin: "claude", session: "s1", cwd: cwd, as: MusaiActors.curator)
+        _ = try await controller.drainNow()
+        #expect(try await lib.db.query(EventsForSessionQuery(.init(session: "s1"))).events.count == 1)
+
+        // A day passes, and the next drain drops it.
+        clock.now = clock.now.addingTimeInterval(24 * 60 * 60)
+        _ = try await capture.captureUserTurn(
+            text: "recent", at: clock.now, origin: "claude", session: "s1", cwd: cwd, as: MusaiActors.curator)
+        _ = try await controller.drainNow()
+        #expect(try await lib.db.query(EventsForSessionQuery(.init(session: "s1"))).events.count == 1)
     }
 
     @Test func aCaptureDuringADrainIsNotStranded() async throws {

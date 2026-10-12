@@ -36,3 +36,10 @@ mutation RecordEvent($kind: EventKind!, $at: DateTime!, $text: String, $tool: St
 mutation MarkEventDrained($id: ID!, $drainedAt: DateTime!) {
   updateEvent(by: {id: $id}, set: {drained: {set: true}, drainedAt: {set: $drainedAt}}) { id drained }
 }
+
+# The queue's own retention, since Lite's `@partition` cannot be added to an existing type: drop the
+# drained events older than the window, in one mutation. Undrained events are never touched — only the
+# queue's redundancy expires.
+mutation DeleteDrainedEvents($before: DateTime!) {
+  deleteEvents(where: {drained: {eq: true}, at: {lt: $before}})
+}

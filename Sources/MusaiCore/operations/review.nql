@@ -25,13 +25,18 @@ query DecisionByID($id: ID!) {
   decision(by: {id: $id}) { ...DecisionBits }
 }
 
+# The queue event a decision was filed under: a replayed drain finds it already filed and skips it.
+query DecisionByOrigin($origin: String!) {
+  decisions(where: {origin: {eq: $origin}}, first: 1) { id }
+}
+
 query DecisionsForProject($slug: String!, $first: Int = 50) {
   decisions(
     where: {project: {slug: {eq: $slug}}, state: {in: [SETTLED, PERSISTED]}}
     orderBy: [{createdAt: ASC}], first: $first) { ...DecisionBits }
 }
 
-mutation RecordProposal($title: String!, $rationale: String, $act: ActKind!, $utterance: ID!, $project: String!) {
+mutation RecordProposal($title: String!, $rationale: String, $act: ActKind!, $utterance: ID!, $project: String!, $origin: String) {
   createDecision(input: {
     title: $title
     rationale: $rationale
@@ -39,6 +44,7 @@ mutation RecordProposal($title: String!, $rationale: String, $act: ActKind!, $ut
     state: PROPOSED
     utterance: {connect: {id: $utterance}}
     project: {connect: {slug: $project}}
+    origin: $origin
   }) { id }
 }
 
