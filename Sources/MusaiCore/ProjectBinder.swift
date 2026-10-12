@@ -23,7 +23,10 @@ public struct ProjectBinder: Sendable {
                 text.removeFirst(scheme.count)
                 break
             }
-            if text.hasPrefix("git@") { text.removeFirst(4) }
+            // Drop the userinfo: `git@`, and any credentials a remote URL carries, so they never reach the store.
+            if let at = text.firstIndex(of: "@"), at < (text.firstIndex(of: "/") ?? text.endIndex) {
+                text = String(text[text.index(after: at)...])
+            }
             return text
         }
         if let at = text.firstIndex(of: "@"), let colon = text.firstIndex(of: ":"), at < colon {
@@ -60,6 +63,8 @@ public struct ProjectBinder: Sendable {
     ) async throws -> BoundSession {
         let remote = Self.gitRemote(for: cwd)
         let slug = try await projectSlug(cwd: cwd, remote: remote, as: actor)
+        // Re-binding a session must not resurrect one that already finished.
+        let existing = try await db.query(SessionByMemoryIdQuery(.init(memorySessionId: memorySessionId))).session
         let session = try await db.mutate(
             UpsertSessionMutation(
                 .init(
@@ -67,6 +72,7 @@ public struct ProjectBinder: Sendable {
                     platform: platform,
                     cwd: cwd.path,
                     title: title,
+                    status: existing?.status ?? .active,
                     startedAt: startedAt,
                     slug: slug)),
             as: actor)
@@ -112,15 +118,29 @@ public struct ProjectBinder: Sendable {
         SHA256.hash(data: Data(path.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The config file for a `.git` directory, or the one its `gitdir:` line points at.
+    /// The config file for a `.git` directory, or the one a `.git` file leads to, through `commondir` when the
+    /// `.git` file names a linked worktree (whose own gitdir holds no config).
     private static func configFile(for dotGit: URL, isDirectory: Bool, in directory: URL) -> URL? {
         if isDirectory { return dotGit.appending(path: "config") }
         guard let contents = try? String(contentsOf: dotGit, encoding: .utf8),
             let line = contents.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") })
         else { return nil }
         let path = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
-        let target = URL(fileURLWithPath: path.hasPrefix("/") ? path : directory.appending(path: path).path)
-        return target.appending(path: "config")
+        let gitDir = resolved(path.hasPrefix("/") ? path : directory.appending(path: path).path)
+        let direct = gitDir.appending(path: "config")
+        if FileManager.default.fileExists(atPath: direct.path) { return direct }
+        guard let common = try? String(contentsOf: gitDir.appending(path: "commondir"), encoding: .utf8) else {
+            return direct
+        }
+        let relative = common.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !relative.isEmpty else { return direct }
+        let commonDir = resolved(relative.hasPrefix("/") ? relative : gitDir.appending(path: relative).path)
+        return commonDir.appending(path: "config")
+    }
+
+    /// A path with `.` and `..` resolved, which `URL.appending(path:)` leaves in place.
+    private static func resolved(_ path: String) -> URL {
+        URL(fileURLWithPath: path).standardizedFileURL
     }
 
     /// The `url` of the `[remote "origin"]` section.

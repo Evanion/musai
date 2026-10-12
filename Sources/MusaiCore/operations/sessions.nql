@@ -21,13 +21,13 @@ query SessionByMemoryId($memorySessionId: String!) {
   session(by: {memorySessionId: $memorySessionId}) { ...SessionBits }
 }
 
-mutation UpsertSession($memorySessionId: String!, $platform: String!, $cwd: String, $title: String, $startedAt: DateTime!, $slug: String!) {
+mutation UpsertSession($memorySessionId: String!, $platform: String!, $cwd: String, $title: String, $status: SessionStatus = ACTIVE, $startedAt: DateTime!, $slug: String!) {
   upsertSession(by: {memorySessionId: $memorySessionId}, input: {
     memorySessionId: $memorySessionId
     platform: $platform
     cwd: $cwd
     title: $title
-    status: ACTIVE
+    status: $status
     startedAt: $startedAt
     project: {connect: {slug: $slug}}
   }) { id }

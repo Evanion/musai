@@ -68,4 +68,60 @@ import Testing
         #expect(project?.name == "Sans-Dépôt")
         #expect(project?.rootPath == root.path)
     }
+
+    /// A linked worktree: `repo/.git` is a real directory, and `worktree/.git` is a file pointing into it.
+    /// The gitdir of a worktree holds no `config`; `commondir` points at the one that does.
+    private func makeWorktree(name: String, remote: String) throws -> (repo: URL, worktree: URL) {
+        let base = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "musai-wt-\(UUID().uuidString)")
+        let repo = base.appending(path: "repo")
+        let gitdir = repo.appending(path: ".git/worktrees/\(name)")
+        try FileManager.default.createDirectory(at: gitdir, withIntermediateDirectories: true)
+        try """
+        [core]
+        \trepositoryformatversion = 0
+        [remote "origin"]
+        \turl = \(remote)
+        """.write(to: repo.appending(path: ".git/config"), atomically: true, encoding: .utf8)
+        try "../..\n".write(to: gitdir.appending(path: "commondir"), atomically: true, encoding: .utf8)
+        let worktree = base.appending(path: name)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try "gitdir: \(gitdir.path)\n".write(
+            to: worktree.appending(path: ".git"), atomically: true, encoding: .utf8)
+        return (repo, worktree)
+    }
+
+    @Test func gitRemoteFindsTheRemoteOfALinkedWorktree() throws {
+        let (repo, worktree) = try makeWorktree(name: "wt", remote: "git@github.com:NorvoDB/norvo-swift.git")
+        defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }
+        #expect(ProjectBinder.gitRemote(for: worktree) == "github.com/norvodb/norvo-swift")
+    }
+
+    @Test func normalizesRemotesWithoutKeepingCredentials() {
+        let withToken = ProjectBinder.normalizedRemote("https://x-access-token:ghp_secret@github.com/Org/Repo.git")
+        #expect(withToken == "github.com/org/repo")
+        #expect(!withToken.contains("secret"))
+        let ssh = ProjectBinder.normalizedRemote("ssh://git@github.com/NorvoDB/norvo-swift.git")
+        #expect(ssh == "github.com/norvodb/norvo-swift")
+    }
+
+    @Test func rebindingKeepsASessionStatus() async throws {
+        let root = try makeRepo(name: "NorvoDB", remote: "git@github.com:NorvoDB/norvo-swift.git")
+        defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+        let lib = try await MusaiLibrary.inMemory()
+        let binder = ProjectBinder(db: lib.db)
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        _ = try await binder.bind(
+            cwd: root, memorySessionId: "s1", platform: "test", startedAt: start, as: MusaiActors.user)
+        _ = try await lib.db.mutate(
+            EndSessionMutation(
+                .init(
+                    memorySessionId: "s1", status: .completed,
+                    endedAt: Date(timeIntervalSince1970: 1_700_100_000))),
+            as: MusaiActors.user)
+        _ = try await binder.bind(
+            cwd: root, memorySessionId: "s1", platform: "test", startedAt: start, as: MusaiActors.curator)
+        let session = try await lib.db.query(SessionByMemoryIdQuery(.init(memorySessionId: "s1"))).session
+        #expect(session?.status == .completed)
+    }
 }
