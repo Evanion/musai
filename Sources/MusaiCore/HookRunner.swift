@@ -58,8 +58,13 @@ public struct HookRunner: Sendable {
                     text: text, at: at, session: session, cwd: cwd, as: MusaiActors.curator)
                 return .silent
             case "SessionStart":
-                // The slice is Task 5.
-                return .silent
+                let bound = try await ProjectBinder(db: library.db).bind(
+                    cwd: URL(fileURLWithPath: cwd), memorySessionId: session, platform: "claude",
+                    startedAt: at, as: MusaiActors.curator)
+                guard let text = try await MusaiSlice.render(project: bound.projectSlug, db: library.db) else {
+                    return .silent
+                }
+                return HookOutcome(stdout: MusaiSlice.additionalContext(text), diagnostic: nil)
             default:
                 return .silent
             }
