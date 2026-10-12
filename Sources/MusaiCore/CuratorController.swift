@@ -57,18 +57,39 @@ public actor CuratorController {
 
     /// Drains the queue now, whatever the debounce says. Concurrent callers — a hand-started drain and a
     /// debounced one — await the same run rather than racing each other into the queue.
+    ///
+    /// A capture can land *while* a drain runs, after that drain has read its batch. A caller that only
+    /// coalesced with the running drain would report the queue drained and go idle, stranding the later event
+    /// until the next capture — and losing it if the retention window passed. So after every join or run the
+    /// queue is looked at again, and drained again if anything is left. The loop stops when the queue is empty,
+    /// or unchanged: an event the curator cannot file must not spin here.
     @discardableResult
     public func drainNow() async throws -> Int {
-        if let running = runningDrain { return try await running.value }
-        let task = Task<Int, Error> { try await self.performDrain() }
-        runningDrain = task
-        defer { runningDrain = nil }
-        return try await task.value
+        var written = 0
+        while true {
+            let before = try await undrainedIDs()
+            if before.isEmpty { break }
+            if let running = runningDrain {
+                written += try await running.value
+            } else {
+                let task = Task<Int, Error> { try await self.performDrain() }
+                runningDrain = task
+                written += try await task.value
+            }
+            let after = try await undrainedIDs()
+            if after.isEmpty || after == before { break }
+        }
+        return written
     }
 
     private func performDrain() async throws -> Int {
         curatorState = .draining
-        defer { curatorState = .idle }
+        // Cleared here rather than by the caller, so a coalesced caller that resumes when this completes
+        // always sees no drain running and can look at the queue for itself.
+        defer {
+            curatorState = .idle
+            runningDrain = nil
+        }
         // Task 4 replaces this resolution: the queue is global and each event files under its own session's
         // project. Until then the batch drains under the first event's session's project — right for every
         // single-project queue, which is all this slice exercises.
@@ -81,5 +102,10 @@ public actor CuratorController {
             cwd: URL(fileURLWithPath: cwd), as: MusaiActors.curator)
         return try await ProposalCurator(db: db, detector: detector)
             .drain(project: project, as: MusaiActors.curator)
+    }
+
+    /// The events still waiting to be drained, as ids — `first` is a bound the backlog should never reach.
+    private func undrainedIDs() async throws -> Set<UUID> {
+        Set(try await db.query(UndrainedEventsQuery(.init(first: 1_000_000))).events.map(\.id))
     }
 }
