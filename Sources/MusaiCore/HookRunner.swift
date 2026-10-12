@@ -1,0 +1,77 @@
+import CryptoKit
+import Foundation
+import NorvoLite
+
+/// What a hook hands back: stdout for the host, or a one-line diagnostic for the log.
+public struct HookOutcome: Sendable, Equatable {
+    public let stdout: String?
+    public let diagnostic: String?
+
+    public init(stdout: String?, diagnostic: String?) {
+        self.stdout = stdout
+        self.diagnostic = diagnostic
+    }
+
+    public static let silent = HookOutcome(stdout: nil, diagnostic: nil)
+}
+
+/// Dispatches one hook invocation. It lives here, in the library, rather than in the executable, so that
+/// "a hook can never break the host's session" is something a test can prove: `run` never throws — a failure
+/// comes back as a diagnostic.
+public struct HookRunner: Sendable {
+    /// stdin beyond this is ignored: a hook is not a place to read a large file.
+    public static let maxStdinBytes = 1 << 20
+
+    public let capture: MusaiCapture
+    public let library: MusaiLibrary
+
+    public init(capture: MusaiCapture, library: MusaiLibrary) {
+        self.capture = capture
+        self.library = library
+    }
+
+    public func run(event: String?, stdin: Data, cwd: String, at: Date = Date()) async -> HookOutcome {
+        do {
+            let payload = try HookPayload.decode(Self.bounded(stdin))
+            let name = event ?? payload.event
+            let cwd = payload.cwd ?? cwd
+            let session = payload.sessionId ?? ""
+            switch name {
+            case "UserPromptSubmit":
+                guard let prompt = payload.prompt, !prompt.isEmpty else { return .silent }
+                try await capture.captureUserTurn(
+                    text: prompt, at: at, origin: "claude", session: session, cwd: cwd, as: MusaiActors.curator)
+                return .silent
+            case "PostToolUse":
+                guard let tool = payload.toolName, !tool.isEmpty else { return .silent }
+                try await capture.captureToolUse(
+                    tool: tool, target: payload.toolTarget, digest: Self.digest(tool, payload.toolTarget),
+                    at: at, session: session, cwd: cwd, as: MusaiActors.curator)
+                return .silent
+            case "Stop", "SessionStart":
+                // The agent's message is wired in Task 4 and the curator in Task 6; the slice is Task 5.
+                return .silent
+            default:
+                return .silent
+            }
+        } catch {
+            return HookOutcome(stdout: nil, diagnostic: "musai: \(Self.oneLine(error))")
+        }
+    }
+
+    static func bounded(_ data: Data) -> Data {
+        data.count > maxStdinBytes ? data.prefix(maxStdinBytes) : data
+    }
+
+    /// The same tool on the same target twice is one digest, so a retried hook is recognisable without
+    /// storing what the tool produced.
+    static func digest(_ tool: String, _ target: String?) -> String {
+        let material = tool + "\u{1F}" + (target ?? "")
+        return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func oneLine(_ error: any Error) -> String {
+        let text = String(describing: error)
+        return text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "failed"
+    }
+}
