@@ -48,8 +48,17 @@ public struct HookRunner: Sendable {
                     tool: tool, target: payload.toolTarget, digest: Self.digest(tool, payload.toolTarget),
                     at: at, session: session, cwd: cwd, as: MusaiActors.curator)
                 return .silent
-            case "Stop", "SessionStart":
-                // The agent's message is wired in Task 4 and the curator in Task 6; the slice is Task 5.
+            case "Stop":
+                // The agent's own account of its turn. The curator joins this in Task 6.
+                var text: String?
+                if let path = payload.transcriptPath, !path.isEmpty {
+                    text = try? TranscriptTail.lastAssistantText(at: URL(fileURLWithPath: path))
+                }
+                try await capture.captureAgentTurn(
+                    text: text, at: at, session: session, cwd: cwd, as: MusaiActors.curator)
+                return .silent
+            case "SessionStart":
+                // The slice is Task 5.
                 return .silent
             default:
                 return .silent
