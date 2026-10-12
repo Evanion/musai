@@ -1,0 +1,227 @@
+# The decision loop: design
+
+Date: 2026-10-12
+Status: **draft, for review** — a reviewer reads this before you do; expect one round of questions back.
+Amends: `2026-10-12-musai-design.md` — it supersedes that document's §3 non-goal ("not a general
+note-taking or PKM tool") and replaces §9's authoring mechanism as the way a decision is captured. Everything
+else there stands, and this document assumes its constraints (§5) and its entity model (§6).
+Source: the conversation of 2026-10-12 that started as "write the claude-mem migration plan" and turned into
+this.
+
+## 1. Intent
+
+Make the agent effective and token-efficient on a long-running project, by giving it the project's
+accumulated understanding instead of making it rebuild that understanding from the repository every task.
+
+The pain, in the words of the person it happens to:
+
+> I tend to burn large amount of tokens and time just for the agent to build the knowledge space that it
+> needs for a task. or else it will have forgotten/missed an aspect that was planned/discussed, and create
+> another solution that doesn't match my intent or understanding of the system.
+
+Two failures, and the second is the expensive one. Rebuilding costs tokens and time. Missing an aspect
+produces a solution that is internally sound and wrong — the user then reconciles two competing designs.
+
+Software development carries two contexts with very different lifetimes: the project's conceptual state
+(months, years) and the agent's context window (one task). The gap between them is the whole problem.
+
+### What claude-mem got wrong
+
+It captured **one side of the conversation**. Its 25,613 observations are the agent's narration of its own
+work, and the session-start handover gives an agent ~50 observations, 5 full narratives and 10 recent
+sessions. The user's side — 17,674 prompts in the same database — is not in the handover at all (a setting,
+`CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE`, off by default, would supply exactly one).
+
+So the agent inherited a recording of itself, and the user's words arrived only as the agent's paraphrase.
+The corrections in the history show what that costs:
+
+| Where | The user's words |
+| --- | --- |
+| NexusDI, 2026-10-11 | "IDK where that came from in 11.7, it's nothing I said." |
+| NorvoDB, 2026-10-09 | "I didn't mean that database is public .. I meant we could make the swift repo public.." |
+| NexusDI, 2026-09-30 | "I just took errors as an example, but I meant it as a general design principle/rule" |
+| NexusDI, 2026-09-23 | "I said that I want to Read the post" |
+| mitt-coop, 2026-09-30 | "the UI still doesn't match the prototyp mock we created" |
+
+In every one the **statement survived and its status did not**. Who uttered it. Whether it was settled or
+merely proposed. Whether it was an example or a rule. Which thing it referred to. What artifact it hung on.
+
+### The two events
+
+A decision becomes real when the user says it, and durable when it is recorded in the proper document.
+
+> well it's decided when I say it. But it needs to be recorded in the proper documents in order to be
+> persisted.
+
+Between those two moments a decision is true but not yet durable: the agent in that session knows it, and
+the next session's agent does not. The set of decisions in that gap is the risk — decided, unrecorded, later
+contradicted. Capturing decisions where they are made, and closing that gap, is this document's subject.
+
+### Reliability is the requirement, and the agent cannot be the mechanism
+
+> It doesn't really matter to me if it's the agent or musai does it, the important part is that it's reliably
+> done. and the agent WILL miss it. an agent is focused on the task at hand. not clerk work.
+
+The agent is structurally the wrong place to put the clerical step: it will skip it precisely when the
+session is most interesting. So capture and filing are **Musai's own machinery**, and the person's
+participation is limited to a confirmation they can give in one keystroke.
+
+## 2. Goals
+
+1. **Capture both sides** of a session's exchange — the user's turns verbatim, the agent's summarized —
+   automatically, with no co-operation from the agent and none from the user.
+2. **Propose decisions** from that exchange: in the user's words, with the user as the actor, and with a
+   pointer back to the event they came from.
+3. **Confirm cheaply** — one keystroke to confirm, correct or drop a proposal.
+4. **Persist** a confirmed decision into the document it belongs to, and know which document that is.
+5. **Surface the gap** — the decisions that were decided and have not landed anywhere.
+6. **Hand over a slice** — before a task, the settled decisions that constrain it, the shape of the parts
+   it will touch, and what is planned next, under a token budget, with links out for more.
+
+## 3. Non-goals
+
+- **Not a chat interface.** The conversation stays in the host; Musai reads its shape, it does not host it.
+- **Not somewhere you write prose.** This supersedes the main design's §3 ("not a general note-taking or PKM
+  tool") only in that Musai *absorbs* notes as evidence (§7). Authoring prose in Musai is not a primary act;
+  the primary acts are confirming a proposal and authoring a spec or plan.
+- **Not a replacement for the agent's reasoning.** It supplies settled facts and their provenance. It does
+  not decide, plan or design.
+
+## 4. Anti-goals
+
+A version that technically works but is:
+
+- **clerk work.** If the user must remember to record a decision, or the agent must be told to, it fails.
+  This is the anti-goal the current design violates, and the reason for this document.
+- **a second context to maintain.** Beyond confirm/correct, it must not want curation. A noisy detector is
+  clerk work by another name, so precision matters far more than recall.
+- **as expensive as the problem.** The handover must cost far fewer tokens than the agent would spend
+  re-deriving the understanding it replaces. A dump of N observations costs the same as the problem.
+- **in the way.** No blocking the agent, no waiting on a model before it can act.
+
+## 5. Constraints
+
+Inherited from the main design (§5) and unchanged: Norvo Lite as the only store; one file; macOS on Apple
+Silicon; SwiftUI; local-first with no metered cloud observer; host-agnostic, nothing depending on one host.
+
+Added or sharpened here:
+
+- **Hooks are the only reliable capture point.** Both sides of the exchange arrive through the host's hook
+  channel, which the main design already establishes (§8, §10). The user's turn is available there — that is
+  how claude-mem collected 17,674 of them — so no host transcript file is parsed.
+- **The queue is appended rows in the graph, not the engine's log.** *Verified:* Norvo Lite exposes no
+  app-facing log or change feed — the C ABI has no log read, and NorvoQL generates no `commits`/`changes`
+  root — so the main design's assumption (§7, and the writer's call in §17) that "Lite's log and change feed
+  is the queue" does not hold today. The queue is the expiring `Event` tier in §6.2. It must be committed
+  before the hook returns, and the curator keeps a cursor. A read-cursor over the engine's own log would be
+  better than a table; that is worth an issue on the Norvo repository and is not on the critical path.
+- **Only the queue is allowed to lose work.** Capture appends to the queue; everything after it (detect,
+  confirm, file) is allowed to lag, because the queue does not.
+- **Detection runs on a local model** from the main design's tiers (§12), and idles: it drains the queue as
+  resources allow, like the curator.
+- **The user's words are stored verbatim.** Storing is cheap; selecting is where the budget goes. A
+  paraphrase is where the intent is already lost, so the user's turn is never rewritten.
+
+## 6. The model changes this forces
+
+Four additions, all small. The builder owns the exact schema; these are the shapes the loop requires, and the
+first two carry decisions made here.
+
+1. **A statement's status.** Today a `Decision` records who created it, through Norvo's actor fields, and
+   nothing more. It needs *what kind of act* it was and *whether it is settled* — a settled-at time, null
+   while it is only a proposal. The builder picks the enums; consider whether "an example" versus "a rule"
+   deserves its own axis, because the NexusDI correction in §1 is exactly that confusion and a single act
+   kind may not separate them. `MemoryKind.DECISION` is retired, so a decision has one home and the overlap
+   between `Decision` and a decision-kind `Memory` disappears.
+2. **The exchange, in two tiers.** The user's side is the durable one:
+   - **`Utterance`** — every user turn, verbatim, with the user as its *speaker* (a field, not Norvo's
+     `createdBy`, because the curator is the one writing it). It links to its session and to any decision it
+     produced. Small, and never expires: this is the record of intent, and intent must outlive a month.
+   - **`Event`** — the raw stream the hooks see: the agent's turns, tool use, whatever the loop cannot yet
+     know the value of. This is the queue, kept about 30 days with cheap expiry, as the main design already
+     requires.
+   Detection reads `Event`; what it promotes survives as an `Utterance`, a `Memory` or a `Decision`. Both
+   tiers are committed before the hook returns.
+3. **Artifacts as things.** A mock, a screenshot, a document, a file. The mitt-coop correction in §1 is a
+   memory pointing at something that no longer existed in the conversation, and today `Memory.provenance` is
+   a string that cannot be linked, filtered or injected. An artifact is an entity that a memory, a decision
+   or a task points at.
+4. **Persistence as a link, and as content.** A decision points at the document it landed in, and the
+   document points back at the decisions it carries — that is what makes "decided but unrecorded" a query.
+   And, settled in conversation: the decision must be **recorded in** that document, not merely linked to it.
+   For a Musai-authored spec or plan that is the main design's §9 export; for a document outside Musai it is
+   a link, because the commit or the file is already the record.
+
+## 7. The loop
+
+```
+session ──hooks──▶ queue: the Event tier ──curator──▶ candidate decisions
+                                                        │
+                                          one keystroke  ▼
+                                              confirmed decision
+                                                        │
+                                    ┌───────────────────┴───────────────────┐
+                                    ▼                                       ▼
+                        carried into its document                 "decided, not recorded"
+                        (spec, plan, task, commit)                        list
+                                    │
+                                    ▼
+                          bounded slice at the next task
+```
+
+1. **Capture.** A hook on the user's turn appends the durable `Utterance` row; every hook appends an `Event` to
+   the expiring tier. Nothing else in the loop can lose an event, so this is the only part that must be
+   trivial and fast, and its write must be committed before the hook returns.
+2. **Detect.** The curator reads queued exchanges and proposes decisions: the user's words, the act kind,
+   the settled state it believes, and a link to the event. It proposes *few and confident* — a false
+   proposal is clerk work, a missed one is the status quo.
+3. **Confirm.** The proposal appears where the person already is — the app's review surface, and optionally
+   an MCP tool the agent can call if it happens to be composing a spec. One keystroke: confirm, correct, or
+   drop. Corrections are the detector's training signal.
+4. **Persist.** A confirmed decision links to the document it belongs to. The main design's §9 export is the
+   mechanism by which a Musai-authored spec or plan reaches the repository; a decision's persistence is the
+   same step, and a decision whose document is code or a commit is recorded as persisted with a link.
+5. **Close the gap.** A view lists decisions that are settled and unpersisted. This is the risk set, and it is
+   the answer to "what did we decide that nobody wrote down?".
+6. **Hand over.** At the start of a task, Musai hands the agent a slice: the settled decisions that constrain
+   the work, the shape of the parts it will touch, what is planned next — selected under a token budget, with
+   links to the full evidence.
+
+## 8. Later slices (named, not designed here)
+
+The person also uses, and wants Musai to absorb, Obsidian (notes), graphify (a structural graph of a codebase
+or corpus) and an LLM-maintained wiki. What makes them absorbable is that they share one shape: evidence,
+filed against a subject, linked to other subjects. So each is **one reader feeding the same filing step** —
+not a new model.
+
+Order, confirmed: (1) this loop; (2) the claude-mem migration, which is evidence that seeds the graph rather
+than a payload, and reuses this document's confirmation surface to turn one-sided entries into real
+decisions; (3) one reader per source, each its own slice.
+
+## 9. What is left to the builder
+
+- The detector's model, prompt, and its precision target; how corrections feed it.
+- Where and when confirmation surfaces without interrupting the work — menu bar, review screen, batched at
+  the end of a session, or all three.
+- The slice's selection algorithm and its token budget.
+- The export format into the repository, which the main design also leaves open (§18).
+- The migration mapping, which is the next document.
+- Which of the four model changes are additive to the existing schema (a `0002_*` migration) and which need
+  the existing `0001_init` to change.
+- The connect handshake's payload per host, and how the user's turn is obtained in each host's hook.
+
+## 10. Calls made while writing this (for review)
+
+- **Capture the exchange, not transcripts.** The user's turn is taken from the hook channel, not by parsing
+  host transcript files, consistent with the main design's §8. *Checked, not assumed:* of the hosts
+  claude-mem saw, all three delivered the user's own prompts — `claude` 16,675, `cursor` 964, `opencode` 40.
+  So Claude Code, OpenCode and Cursor expose it; Codex and Pi are unverified and are checked when they are
+  added. A host offering only the agent's side becomes a per-host decision then, not a redesign now.
+- **The queue is the expiring `Event` tier, not the engine's log.** *Checked:* no app-facing log or change
+  feed exists in the C ABI or in NorvoQL's generated roots. Worth a Norvo issue for a log read-cursor; not on
+  the critical path.
+- **Store the user's words verbatim, select sparingly.** Disk is cheap; the budget is spent on selection.
+- **The loop is Musai's machinery; MCP authoring stays a manual override.**
+- **Precision over recall in detection.** A noisy proposal queue is clerk work, which is the anti-goal.
+- **This document supersedes the main design's §3 non-goal and §9 authoring mechanism** rather than editing
+  that approved document in place.
