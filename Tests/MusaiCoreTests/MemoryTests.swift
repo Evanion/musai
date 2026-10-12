@@ -61,7 +61,8 @@ import Testing
         let lib = try await MusaiLibrary.inMemory()
         _ = try await seedProject(lib)
         let decision = try await lib.db.mutate(
-            RecordDecisionMutation(.init(title: "One file", rationale: "Anti-clunk and anti-weight", slug: "musai")),
+            RecordDecisionMutation(.init(
+                title: "One file", rationale: "Anti-clunk and anti-weight", act: .decision, slug: "musai")),
             as: MusaiActors.user).createDecision.id
         _ = try await lib.db.mutate(
             AttachDecisionToSubjectMutation(.init(id: decision, subject: decision)), as: MusaiActors.user)

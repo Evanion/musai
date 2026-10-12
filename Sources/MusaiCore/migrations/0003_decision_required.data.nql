@@ -1,0 +1,5 @@
+mutation BackfillDecisionState {
+  updateDecisions(where: {}, set: {act: {set: DECISION}, state: {set: SETTLED}}) {
+    id
+  }
+}

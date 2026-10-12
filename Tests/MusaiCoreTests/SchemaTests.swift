@@ -9,6 +9,6 @@ import Testing
         for type in ["Project", "Idea", "Spec", "Plan", "Task", "Decision", "Memory", "Session", "WorkState", "Link"] {
             #expect(sdl.contains("type \(type)"))
         }
-        #expect(NorvoSchema.migrations.map(\.name) == ["0001_init"])
+        #expect(NorvoSchema.migrations.map(\.name) == ["0001_init", "0002_loop", "0003_decision_required"])
     }
 }

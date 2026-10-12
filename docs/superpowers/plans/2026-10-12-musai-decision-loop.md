@@ -98,8 +98,9 @@ import Testing
             as: MusaiActors.curator)
         _ = try await lib.db.mutate(
             RecordEventMutation(.init(
-                kind: .toolUse, at: Date(timeIntervalSince1970: 1_700_000_002), session: "s1",
-                tool: "Edit", target: "Sources/MusaiCore/ProjectBinder.swift", digest: "sha256:abc")),
+                kind: .toolUse, at: Date(timeIntervalSince1970: 1_700_000_002),
+                tool: "Edit", target: "Sources/MusaiCore/ProjectBinder.swift", digest: "sha256:abc",
+                session: "s1")),
             as: MusaiActors.curator)
 
         let utterances = try await lib.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
@@ -133,7 +134,7 @@ type Utterance {
   at: DateTime! @index
   speaker: Speaker! @index
   origin: String @index
-  session: Session @index
+  session: Session
   decisions: [Decision!]! @inverse(of: "utterance")
 }
 
@@ -146,7 +147,7 @@ type Event {
   at: DateTime! @index
   drained: Boolean! @index
   drainedAt: DateTime
-  session: Session @index
+  session: Session
 }
 ```
 
@@ -255,6 +256,7 @@ fragment DecisionBits on Decision {
   persistedAt
   document { id }
   documentRef
+  subject { id }
   utterance { id text at speaker }
   project { slug }
 }
