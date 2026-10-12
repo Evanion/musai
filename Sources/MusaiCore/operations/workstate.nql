@@ -1,0 +1,20 @@
+fragment WorkStateBits on WorkState {
+  id
+  listName
+  fields
+  origin
+  createdAt
+  project { slug }
+}
+
+query WorkStateLists($slug: String!) {
+  workStates(where: {project: {slug: {eq: $slug}}}, orderBy: [{listName: ASC}, {createdAt: ASC}]) { ...WorkStateBits }
+}
+
+mutation AddWorkStateEntry($listName: String!, $fields: JSON!, $origin: String, $slug: String!) {
+  createWorkState(input: {listName: $listName, fields: $fields, origin: $origin, project: {connect: {slug: $slug}}}) { id }
+}
+
+mutation UpdateWorkStateEntry($id: ID!, $fields: JSON!) {
+  updateWorkState(by: {id: $id}, set: {fields: {set: $fields}}) { id }
+}
