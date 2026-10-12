@@ -48,9 +48,15 @@ private final class StatusRecorder: @unchecked Sendable {
             .appending(path: "Musai.norvo")
     }
 
+    /// The log beside that store, for the same reason: an agent test must not write into the developer's real
+    /// `~/Library/Logs/Musai`.
+    private static func log(for store: URL) -> URL {
+        store.deletingLastPathComponent().appending(path: "helper.log")
+    }
+
     @Test func itOpensTheStoreOnceAndServes() async throws {
         let store = Self.temporaryStore()
-        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector())
+        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector(), logURL: Self.log(for: store))
         defer {
             agent.stop()
             try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
@@ -79,7 +85,7 @@ private final class StatusRecorder: @unchecked Sendable {
 
     @Test func aSecondAgentRefusesToOpenTheStoreOnTheSameFile() async throws {
         let store = Self.temporaryStore()
-        let first = try MusaiAgent(libraryURL: store, detector: SilentDetector())
+        let first = try MusaiAgent(libraryURL: store, detector: SilentDetector(), logURL: Self.log(for: store))
         defer {
             first.stop()
             try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
@@ -88,7 +94,7 @@ private final class StatusRecorder: @unchecked Sendable {
 
         // The backoff is real in production; the wait is not this test's subject.
         let second = try MusaiAgent(
-            libraryURL: store, detector: SilentDetector(), sleep: { _ in })
+            libraryURL: store, detector: SilentDetector(), logURL: Self.log(for: store), sleep: { _ in })
         var thrown: (any Error)?
         do {
             _ = try await second.start()
@@ -109,7 +115,7 @@ private final class StatusRecorder: @unchecked Sendable {
 
     @Test func statusTextReportsWhatTheBackendIsDoing() async throws {
         let store = Self.temporaryStore()
-        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector())
+        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector(), logURL: Self.log(for: store))
         defer {
             agent.stop()
             try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
@@ -128,7 +134,7 @@ private final class StatusRecorder: @unchecked Sendable {
     /// and an idle state stays silent.
     @Test func aStatusChangeIsPublishedAndIdleIsSilent() async throws {
         let store = Self.temporaryStore()
-        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector())
+        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector(), logURL: Self.log(for: store))
         defer {
             agent.stop()
             try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
@@ -155,7 +161,7 @@ private final class StatusRecorder: @unchecked Sendable {
         let opens = OpenCounter()
         let probe = FatalOnceProbe()
         let agent = try MusaiAgent(
-            libraryURL: store, detector: SilentDetector(),
+            libraryURL: store, detector: SilentDetector(), logURL: Self.log(for: store),
             open: { url, options in
                 await opens.bump()
                 return try await MusaiLibrary.open(at: url, options: options)

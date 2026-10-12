@@ -41,6 +41,8 @@ struct MusaiHook {
                 return
             }
             await Review(client: client).run()
+        case "doctor":
+            await doctor(arguments: arguments)
         case "install":
             if arguments.contains("--uninstall") {
                 uninstall(arguments: arguments)
@@ -98,6 +100,28 @@ struct MusaiHook {
         } catch {
             diagnose(oneLine(error))
         }
+    }
+
+    /// `musai doctor`: reads the record, asks `/health` when the process behind it is still alive, reads the
+    /// log's tail and looks for the bundle, and prints what `MusaiDiagnostics` makes of it all. It changes
+    /// nothing and starts nothing — a diagnosis that acted would hide the state it was called to show — and
+    /// it exits 0 whatever it finds: this is not a check, whatever the exit code would otherwise mean.
+    static func doctor(arguments: [String]) async {
+        let record = try? HelperRecord.read()
+        var health: EndpointHealth?
+        if let record, record.isAlive {
+            // The token file is the source of truth; the record republishes it too, because a record that
+            // could not be used to reach the backend would be a strange thing to publish.
+            let token = MusaiToken.read() ?? record.token
+            health = await MusaiClient(record: record, token: token).health()
+        }
+        let bundle = appDirectory(in: arguments).appending(path: "\(MusaiBundle.appName).app")
+        let found = FileManager.default.fileExists(atPath: bundle.path) ? bundle : nil
+
+        print(
+            MusaiDiagnostics.screen(
+                record: record, health: health,
+                logTail: MusaiLog().tail(MusaiDiagnostics.logLines), bundlePath: found))
     }
 
     /// `musai install --uninstall`: stop the agent, remove the plist and the bundle, and take our hooks back out.

@@ -34,7 +34,7 @@ struct BackendFixture {
             db: library.db, detector: detector,
             sleep: { _ in try? await Task.sleep(for: .seconds(3_600)) }, debounce: 1)
         let endpoint = MusaiEndpoint(
-            db: library.db, library: library, state: state, curator: controller, token: token)
+            store: .open(db: library.db, library: library), state: state, curator: controller, token: token)
         let listener = EndpointListener(endpoint: endpoint)
         let port = try listener.start()
         return BackendFixture(

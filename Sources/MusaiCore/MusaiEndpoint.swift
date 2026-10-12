@@ -4,43 +4,66 @@ import NorvoLite
 /// The backend's whole protocol, one request at a time: a pure router from `EndpointRequest` to
 /// `EndpointResponse`. It owns nothing — the store is the agent's, the curator runs in its own controller —
 /// so a test drives the whole protocol without a socket, and Task 2's listener can serve it unchanged.
+///
+/// It can also exist with **no store at all**, which is a state a person has to be able to read: an agent
+/// that could not open its store keeps its listener up, and `/health` is the one route that still answers —
+/// truthfully saying `failed` — while every other route says why in one line naming the log, rather than
+/// crashing or leaving a 500 a client cannot tell from a broken backend.
 public struct MusaiEndpoint: Sendable {
-    /// What the queries and captures take.
-    public let db: Database
-    /// The library that owns the store this endpoint serves; held so the owner outlives the requests.
-    public let library: MusaiLibrary
+    /// What this endpoint has to serve from. There is deliberately no third state, and not two independent
+    /// optionals either: the store either opened or it did not, and two optionals could disagree about which.
+    public enum Store: Sendable {
+        /// The store this endpoint serves, and the library that owns it — held so the owner outlives the
+        /// requests.
+        case open(db: Database, library: MusaiLibrary)
+        /// No store: the agent could not open one. `/health` still answers.
+        case none
+    }
+
+    public let store: Store
     public let state: EndpointState
-    public let curator: CuratorController
+    /// The drain that turns captures into proposals. `nil` when there is no store to drain.
+    public let curator: CuratorController?
     /// Every request must carry this. A stranger on the machine gets a 401 and learns nothing — not even
     /// the store's path, which is why `/health` checks it too.
     public let token: String
+    /// The log a person reads when something is wrong, named in the one line a storeless endpoint answers
+    /// with. The agent passes its own; the default is the one a person will find.
+    public let logPath: String
 
     public init(
-        db: Database, library: MusaiLibrary, state: EndpointState, curator: CuratorController, token: String
+        store: Store, state: EndpointState, curator: CuratorController? = nil, token: String,
+        logPath: String = MusaiLog.defaultURL.path
     ) {
-        self.db = db
-        self.library = library
+        self.store = store
         self.state = state
         self.curator = curator
         self.token = token
+        self.logPath = logPath
     }
 
     public func respond(to request: EndpointRequest) async -> EndpointResponse {
         guard request.token == token else { return .error(401, "not authorized") }
+
+        // `/health` is the one route that never touches the store: it is how a process that could not open
+        // one still tells the truth, and the reason the process stays up at all.
+        if request.method == "GET", request.path == "/health" { return await health() }
+
+        // Every other route needs the store, so its absence is asked about once, here, before any of them.
+        guard case .open(let db, _) = store, let curator else { return noStore() }
+
         do {
             switch (request.method, request.path) {
-            case ("GET", "/health"):
-                return try await health()
             case ("POST", "/capture"):
-                return try await capture(request)
+                return try await capture(request, db: db, curator: curator)
             case ("GET", "/context"):
-                return try await context(request)
+                return try await context(request, db: db)
             case ("GET", "/proposals"):
-                return try await proposals()
+                return try await proposals(db: db)
             case ("POST", "/admin/restart"):
                 return try await restart()
             case ("POST", let path) where path.hasPrefix("/proposals/"):
-                return try await act(on: path, body: request.body)
+                return try await act(on: path, body: request.body, db: db)
             default:
                 return miss(request)
             }
@@ -50,15 +73,34 @@ public struct MusaiEndpoint: Sendable {
         }
     }
 
-    /// The queue is the truth; the state mirrors it, so the status item and the next reader agree.
-    private func health() async throws -> EndpointResponse {
-        await state.setBacklogDepth(try await undrainedCount())
-        await state.setCuratorState(curator.curatorState)
-        let health = await state.health()
-        return try .json(health)
+    /// One line, and the file that has the rest. A client that reached a storeless backend learns that it
+    /// cannot answer and where to look, rather than getting a 500 it cannot tell from a broken store, or a
+    /// connection that drops as if the process had died.
+    ///
+    /// The store could not be opened rather than *is closed*: the only way to have no store is to have failed
+    /// to open one — nothing closes a working store without the process ending.
+    private func noStore() -> EndpointResponse {
+        .error(503, "this backend could not open its store at \(state.storePath); see \(logPath)")
     }
 
-    private func capture(_ request: EndpointRequest) async throws -> EndpointResponse {
+    /// The queue is the truth; the state mirrors it, so the status item and the next reader agree. With no
+    /// store open there is nothing to mirror: the state already holds the truth — `failed` — and reading a
+    /// store that is not there is exactly what must not happen on the one route a person can still reach.
+    private func health() async -> EndpointResponse {
+        do {
+            if case .open(let db, _) = store {
+                await state.setBacklogDepth(try await undrainedCount(db))
+            }
+            if let curator { await state.setCuratorState(curator.curatorState) }
+            return try .json(await state.health())
+        } catch {
+            return .error(500, Self.oneLine(error))
+        }
+    }
+
+    private func capture(
+        _ request: EndpointRequest, db: Database, curator: CuratorController
+    ) async throws -> EndpointResponse {
         let event = try EndpointWire.decoder().decode(NormalizedEvent.self, from: request.body)
         let capture = MusaiCapture(db: db)
         let outcome: CaptureOutcome
@@ -72,7 +114,7 @@ public struct MusaiEndpoint: Sendable {
             // The event is durable; the drain is not this caller's problem. It runs debounced, off the
             // request path, so a slow model never delays a capture.
             await curator.noteCapture()
-            await state.setBacklogDepth(try await undrainedCount())
+            await state.setBacklogDepth(try await undrainedCount(db))
         }
         return try .json(CaptureReply(stored: outcome))
     }
@@ -81,11 +123,11 @@ public struct MusaiEndpoint: Sendable {
     /// returns the utterance's id either way.
     private func captureUserTurn(_ event: NormalizedEvent, _ capture: MusaiCapture) async throws -> CaptureOutcome {
         guard let text = event.text, !text.isEmpty else { return .ignored }
-        let before = try await utterances(in: event.session)
+        let before = try await utterances(in: event.session, db: capture.db)
         _ = try await capture.captureUserTurn(
             text: text, at: event.at, origin: nil, session: event.session, cwd: event.cwd,
             as: MusaiActors.curator)
-        return try await utterances(in: event.session) > before ? .created : .duplicate
+        return try await utterances(in: event.session, db: capture.db) > before ? .created : .duplicate
     }
 
     /// The agent's own account of its turn; the capture returns nil when it already has this one.
@@ -99,14 +141,14 @@ public struct MusaiEndpoint: Sendable {
     /// A tool use, as a reference: what ran and on what, never what it produced.
     private func captureToolUse(_ event: NormalizedEvent, _ capture: MusaiCapture) async throws -> CaptureOutcome {
         guard let tool = event.tool, !tool.isEmpty else { return .ignored }
-        let before = try await toolUses(in: event.session)
+        let before = try await toolUses(in: event.session, db: capture.db)
         try await capture.captureToolUse(
             tool: tool, target: event.target, digest: event.digest, at: event.at, session: event.session,
             cwd: event.cwd, as: MusaiActors.curator)
-        return try await toolUses(in: event.session) > before ? .created : .duplicate
+        return try await toolUses(in: event.session, db: capture.db) > before ? .created : .duplicate
     }
 
-    private func context(_ request: EndpointRequest) async throws -> EndpointResponse {
+    private func context(_ request: EndpointRequest, db: Database) async throws -> EndpointResponse {
         guard let cwd = request.query["cwd"], !cwd.isEmpty else { return .error(400, "cwd is required") }
         // A read must not write: a typo'd cwd gets nothing to say, not a junk project.
         guard let project = try await ProjectBinder(db: db).knownProject(cwd: URL(fileURLWithPath: cwd)),
@@ -117,14 +159,14 @@ public struct MusaiEndpoint: Sendable {
 
     /// What `musai review` lists, and the window app will show: the gap first, then what awaits
     /// confirmation.
-    private func proposals() async throws -> EndpointResponse {
+    private func proposals(db: Database) async throws -> EndpointResponse {
         let review = ReviewSession(db: db)
         let reply = ProposalsReply(gap: try await review.unpersisted(), pending: try await review.pending())
         return try .json(reply)
     }
 
     /// `POST /proposals/{id}/{settle|persist|drop}` — one action, applied as the person.
-    private func act(on path: String, body: Data) async throws -> EndpointResponse {
+    private func act(on path: String, body: Data, db: Database) async throws -> EndpointResponse {
         let parts = path.split(separator: "/").map(String.init)
         guard parts.count == 3, let id = UUID(uuidString: parts[1]) else {
             return .error(404, "no such route")
@@ -176,16 +218,16 @@ public struct MusaiEndpoint: Sendable {
         return ["settle", "persist", "drop"].contains(parts[2])
     }
 
-    private func undrainedCount() async throws -> Int {
+    private func undrainedCount(_ db: Database) async throws -> Int {
         // `first` is a bound the backlog should never reach; a health report must not lie about a failure.
         try await db.query(UndrainedEventsQuery(.init(first: 1_000_000))).events.count
     }
 
-    private func utterances(in session: String) async throws -> Int {
+    private func utterances(in session: String, db: Database) async throws -> Int {
         try await db.query(UtterancesForSessionQuery(.init(session: session))).utterances.count
     }
 
-    private func toolUses(in session: String) async throws -> Int {
+    private func toolUses(in session: String, db: Database) async throws -> Int {
         try await db.query(EventsForSessionQuery(.init(session: session))).events
             .filter { $0.kind == .toolUse }.count
     }

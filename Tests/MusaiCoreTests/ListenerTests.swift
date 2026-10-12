@@ -31,7 +31,8 @@ private struct ListenerQuietDetector: DecisionDetector {
             db: library.db, detector: ListenerQuietDetector(),
             sleep: { _ in try? await Task.sleep(for: .seconds(3_600)) }, debounce: 1)
         let endpoint = MusaiEndpoint(
-            db: library.db, library: library, state: state, curator: controller, token: Self.token)
+            store: .open(db: library.db, library: library), state: state, curator: controller,
+            token: Self.token)
         return Made(library: library, endpoint: endpoint, store: store)
     }
 

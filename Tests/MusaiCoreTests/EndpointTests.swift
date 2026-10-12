@@ -93,7 +93,8 @@ private actor NapGate {
         let controller = CuratorController(
             db: library.db, detector: detector, sleep: sleep, debounce: 1)
         let endpoint = MusaiEndpoint(
-            db: library.db, library: library, state: state, curator: controller, token: Self.token)
+            store: .open(db: library.db, library: library), state: state, curator: controller,
+            token: Self.token)
         return (library, endpoint, store, controller)
     }
 
