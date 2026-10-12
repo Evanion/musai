@@ -275,6 +275,11 @@ git commit -m "feat: the agent, its status item, and the bundle it lives in"
 - Consumes: Task 5's `MusaiBundle.assemble`.
 - Produces: `MusaiInstall.agentPlist(executable:label:) -> Data`; `MusaiInstall.installBundle(app:agent:into:launchAgentsDirectory:library:) throws -> URL`; `MusaiInstall.uninstall(bundle:launchAgentsDirectory:) throws`.
 
+**The outer binary is decided here, not improvised.** `Contents/MacOS/Musai` is the `musai` CLI binary. Task 5's
+bundle tests use caller-supplied stand-ins, and nothing else in this plan creates the window app — so without
+this line `install` would ship an app that cannot launch. A stub window app is not worth inventing; the real one
+is its own slice, and replacing the CLI binary is how it arrives.
+
 - [ ] **Step 1: Write the failing tests**
 
 Five tests: `theAgentPlistSaysRunAtLoadAndKeepAlive` (parse it: `RunAtLoad`, `KeepAlive`, `Program` pointing at `…/MusaiAgent.app/Contents/MacOS/MusaiAgent`, `Label == "dev.musai.agent"`); `installingTwiceChangesNothing` (the plist and the bundle are byte-identical after a second install); `installWritesTheBundleWhereItWasAsked`; `uninstallRemovesThePlistAndTheBundle`; and `installingKeepsTheClaudeCodeHooks` — the hooks from the decision-loop plan are still merged, and `--uninstall` removes both.
@@ -324,6 +329,13 @@ Expected: FAIL — `cannot find 'MusaiDiagnostics' in scope`.
 - [ ] **Step 3: Write the files**
 
 The agent writes its log through `MusaiLog` (and `os_log` alongside). `doctor` prints `MusaiDiagnostics.screen` from the record, a `/health` request when one answers, and the log's tail.
+
+**And the agent must survive an unopenable store, because nothing else does.** Today a `.fatal` from *open*
+propagates, the agent exits non-zero, and launchd relaunches a dying process forever — no `/health`, no status
+item, no diagnosis; the person sees an app that never appears. So: catch it, keep the listener up reporting
+`storeState == "failed"` through `/health`, show that in the status item, and let `doctor` read it. That is the
+agent's half of the plan's Review Focus 4; this step is where it lives, and the test is that `/health` answers
+with a failed store rather than the process dying.
 
 - [ ] **Step 4: Run them to verify they pass**
 
