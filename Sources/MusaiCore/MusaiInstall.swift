@@ -1,79 +1,56 @@
 import Foundation
 
-/// Installs the loop into a host's settings, reversibly: a backup of what was there is kept, and merging twice
-/// changes nothing.
+/// Installs the backend onto this machine: the one `Musai.app` bundle and the launch agent that keeps it
+/// running. It is host-agnostic — it knows the bundle and launchd, and nothing about any particular client —
+/// and it is reversible and idempotent: a second install changes nothing, and uninstalling takes back exactly
+/// what installing put down.
 public enum MusaiInstall {
-    public static let events = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
+    /// The launch agent's label. The plist is written under this name, and a client asks launchd to start the
+    /// job under the same one.
+    public static let agentLabel = "dev.musai.agent"
 
-    /// The events we rely on, with the matcher and timeout each needs. `SessionStart` is what hands the agent
-    /// the slice; `UserPromptSubmit` carries the person's turn; `PostToolUse` and `Stop` feed the queue.
-    public static func claudeCodeHooksSettings(executable: String) -> Data {
-        let quoted = "'" + executable.replacingOccurrences(of: "'", with: "'\\''") + "'"
-
-        func entry(_ event: String, matcher: String?, timeout: Int, background: Bool) -> [String: Any] {
-            var hook: [String: Any] = [
-                "type": "command",
-                // `|| true` is the promise: a hook can never fail the session. Its diagnostic still reaches
-                // stderr, because a capture that quietly did not happen is the one failure worth hearing about.
-                "command": "\(quoted) hook \(event) || true",
-                "timeout": timeout,
-            ]
-            if background { hook["async"] = true }
-            var wrapper: [String: Any] = ["hooks": [hook]]
-            if let matcher { wrapper["matcher"] = matcher }
-            return wrapper
-        }
-
-        let hooks: [String: Any] = [
-            "SessionStart": [entry("SessionStart", matcher: "startup|resume|clear", timeout: 60, background: false)],
-            "UserPromptSubmit": [entry("UserPromptSubmit", matcher: nil, timeout: 15, background: false)],
-            "PostToolUse": [entry("PostToolUse", matcher: "*", timeout: 120, background: true)],
-            "Stop": [entry("Stop", matcher: nil, timeout: 120, background: true)],
+    /// The launch agent's property list: start at login, keep alive, and run the agent inside the bundle it was
+    /// handed. It carries the store the agent serves, because `--library`/`MUSAI_LIBRARY` choose that store at
+    /// install time rather than at every launch.
+    public static func agentPlist(executable: URL, label: String, library: URL) -> Data {
+        let values: [String: Any] = [
+            "Label": label,
+            "Program": executable.path,
+            "RunAtLoad": true,
+            "KeepAlive": true,
+            "EnvironmentVariables": ["MUSAI_LIBRARY": library.path],
         ]
-        return render(["hooks": hooks])
+        return (try? PropertyListSerialization.data(fromPropertyList: values, format: .xml, options: 0))
+            ?? Data()
     }
 
-    /// Adds our entries to whatever is already there, leaving every other hook untouched.
-    public static func merge(claudeCodeHooksSettings ours: Data, into existing: Data) throws -> Data {
-        var root = ((try? JSONSerialization.jsonObject(with: existing)) as? [String: Any]) ?? [:]
-        var hooks = (root["hooks"] as? [String: Any]) ?? [:]
-        let ourHooks = ((try? JSONSerialization.jsonObject(with: ours)) as? [String: Any])?["hooks"] as? [String: Any]
-
-        for (event, value) in ourHooks ?? [:] {
-            var entries = (hooks[event] as? [[String: Any]]) ?? []
-            for candidate in (value as? [[String: Any]]) ?? [] {
-                let ours = commands(in: candidate)
-                let alreadyThere = entries.contains { !Set(commands(in: $0)).isDisjoint(with: ours) }
-                if !alreadyThere { entries.append(candidate) }
-            }
-            hooks[event] = entries
-        }
-        root["hooks"] = hooks
-        return render(root)
-    }
-
-    /// Writes the merged settings and keeps a backup of what was there. Returns one line describing it.
+    /// Assembles `Musai.app` where it was asked, then writes the launch agent that starts its nested agent at
+    /// login. `app` and `agent` are the built executables; `resources` holds the two `Info.plist`s. Returns the
+    /// bundle root. The bundle is replaced whole and the plist rewritten the same way each time, so assembling
+    /// twice leaves both byte-identical.
     @discardableResult
-    public static func install(executable: String, settingsURL: URL) throws -> String {
-        let existing = (try? Data(contentsOf: settingsURL)) ?? Data("{}".utf8)
-        let hadFile = FileManager.default.fileExists(atPath: settingsURL.path)
-        let merged = try merge(
-            claudeCodeHooksSettings: claudeCodeHooksSettings(executable: executable), into: existing)
-        if hadFile {
-            try existing.write(to: URL(fileURLWithPath: settingsURL.path + ".musai-backup"))
+    public static func installBundle(
+        app: URL, agent: URL, into: URL, launchAgentsDirectory: URL, library: URL, resources: URL
+    ) throws -> URL {
+        let root = try MusaiBundle.assemble(app: app, agent: agent, into: into, resources: resources)
+        let agentExecutable = root.appending(
+            path: "Contents/Library/LoginItems/\(MusaiBundle.agentName).app/Contents/MacOS/\(MusaiBundle.agentName)")
+        try FileManager.default.createDirectory(
+            at: launchAgentsDirectory, withIntermediateDirectories: true)
+        try agentPlist(executable: agentExecutable, label: agentLabel, library: library)
+            .write(to: launchAgentsDirectory.appending(path: "\(agentLabel).plist"))
+        return root
+    }
+
+    /// Removes the bundle and its launch agent. An already-absent file is not an error: uninstalling twice is a
+    /// no-op, and a person who removed one of the two by hand can still run this to take back the other.
+    public static func uninstall(bundle: URL, launchAgentsDirectory: URL) throws {
+        let plist = launchAgentsDirectory.appending(path: "\(agentLabel).plist")
+        if FileManager.default.fileExists(atPath: plist.path) {
+            try FileManager.default.removeItem(at: plist)
         }
-        try merged.write(to: settingsURL)
-        let backed = hadFile ? ", with a backup beside it" : ""
-        return "musai: installed \(events.joined(separator: ", ")) into \(settingsURL.path)\(backed)"
-    }
-
-    static func commands(in entry: [String: Any]) -> [String] {
-        ((entry["hooks"] as? [[String: Any]]) ?? []).compactMap { $0["command"] as? String }
-    }
-
-    private static func render(_ object: [String: Any]) -> Data {
-        (try? JSONSerialization.data(
-            withJSONObject: object,
-            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+        if FileManager.default.fileExists(atPath: bundle.path) {
+            try FileManager.default.removeItem(at: bundle)
+        }
     }
 }

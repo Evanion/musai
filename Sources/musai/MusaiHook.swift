@@ -16,8 +16,11 @@ struct MusaiHook {
         guard let command = arguments.first else { return }
         arguments.removeFirst()
         // `--library` is still accepted and consumed, but it no longer reaches a hook: it chooses the store at
-        // install time, and a client learns the store from the record instead.
+        // install time, and a client learns the store from the record instead. `install` is the one command
+        // that still needs its value, so it is kept before the flag is consumed below.
+        var library: String?
         if let index = arguments.firstIndex(of: "--library"), index + 1 < arguments.count {
+            library = arguments[index + 1]
             arguments.removeSubrange(index...(index + 1))
         }
 
@@ -39,22 +42,75 @@ struct MusaiHook {
             }
             await Review(client: client).run()
         case "install":
-            guard arguments.contains("--claude-code") else {
-                FileHandle.standardError.write(
-                    Data("musai: install --claude-code [--settings <path>]\n".utf8))
-                return
-            }
-            let settings = arguments.firstIndex(of: "--settings").flatMap { index in
-                index + 1 < arguments.count ? URL(fileURLWithPath: arguments[index + 1]) : nil
-            } ?? Self.claudeSettingsURL()
-            let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path
-            do {
-                print(try MusaiInstall.install(executable: executable, settingsURL: settings))
-            } catch {
-                diagnose(oneLine(error))
+            if arguments.contains("--uninstall") {
+                uninstall(arguments: arguments)
+            } else {
+                install(arguments: arguments, library: library.map { URL(fileURLWithPath: $0) })
             }
         default:
             return
+        }
+    }
+
+    /// `musai install`: assemble the bundle, register the launch agent, and merge the host's hooks. `--claude-code`
+    /// is still accepted for the command's documented spelling, but it is no longer required — this is the whole
+    /// install by default.
+    static func install(arguments: [String], library: URL?) {
+        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        let built = executable.deletingLastPathComponent()
+        let agent = built.appending(path: "musai-agent")
+        guard let resources = repositoryResources(from: executable) else {
+            diagnose(
+                "cannot find Resources/App-Info.plist above \(built.path); run this from the checkout you built")
+            return
+        }
+        for (what, path) in [
+            ("the musai executable", executable),
+            ("the musai-agent executable", agent),
+            ("Resources/App-Info.plist", resources.appending(path: MusaiBundle.appInfoPlistName)),
+        ] {
+            guard FileManager.default.fileExists(atPath: path.path) else {
+                diagnose("cannot find \(what) at \(path.path); run `swift build` first")
+                return
+            }
+        }
+
+        let appDirectory = appDirectory(in: arguments)
+        let launchAgents = launchAgentsDirectory()
+        let store = library ?? MusaiLibrary.defaultFileURL
+        let settings = settingsURL(in: arguments)
+
+        do {
+            let root = try MusaiInstall.installBundle(
+                app: executable, agent: agent, into: appDirectory,
+                launchAgentsDirectory: launchAgents, library: store, resources: resources)
+            loadAgent(plistAt: launchAgents.appending(path: "\(MusaiInstall.agentLabel).plist"))
+            print("musai: installed Musai.app at \(root.path)")
+            print("musai: registered \(MusaiInstall.agentLabel) to start at login, serving \(store.path)")
+            print("musai: moving Musai.app breaks that registration; run `musai install` again after moving it")
+            print(try ClaudeCodeHooks.install(executable: executable.path, settingsURL: settings))
+        } catch {
+            diagnose(oneLine(error))
+        }
+    }
+
+    /// `musai install --uninstall`: stop the agent, remove the plist and the bundle, and take our hooks back out.
+    /// It is the exact reverse of the install above, and it always tells the person what it did.
+    static func uninstall(arguments: [String]) {
+        let appDirectory = appDirectory(in: arguments)
+        let launchAgents = launchAgentsDirectory()
+        let settings = settingsURL(in: arguments)
+
+        // Booted out first, so `KeepAlive` cannot bring the agent straight back while its plist is being removed.
+        launchctl(["bootout", "gui/\(getuid())/\(MusaiInstall.agentLabel)"])
+        do {
+            try MusaiInstall.uninstall(
+                bundle: appDirectory.appending(path: "\(MusaiBundle.appName).app"),
+                launchAgentsDirectory: launchAgents)
+            print("musai: removed Musai.app from \(appDirectory.path) and its launch agent")
+            print(try ClaudeCodeHooks.uninstall(settingsURL: settings))
+        } catch {
+            diagnose(oneLine(error))
         }
     }
 
@@ -96,6 +152,62 @@ struct MusaiHook {
         let configDirectory = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".claude").path
         return URL(fileURLWithPath: configDirectory).appending(path: "settings.json")
+    }
+
+    /// The host's settings file: `--settings <path>`, else the Claude Code default with its `CLAUDE_CONFIG_DIR`
+    /// override honoured.
+    private static func settingsURL(in arguments: [String]) -> URL {
+        arguments.firstIndex(of: "--settings").flatMap { index in
+            index + 1 < arguments.count ? URL(fileURLWithPath: arguments[index + 1]) : nil
+        } ?? claudeSettingsURL()
+    }
+
+    /// Where the bundle goes: `--app <dir>`, else `~/Applications`.
+    private static func appDirectory(in arguments: [String]) -> URL {
+        arguments.firstIndex(of: "--app").flatMap { index in
+            index + 1 < arguments.count ? URL(fileURLWithPath: arguments[index + 1]) : nil
+        } ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Applications")
+    }
+
+    private static func launchAgentsDirectory() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/LaunchAgents")
+    }
+
+    /// The repository's `Resources` directory, found above the built executable (`.build/<config>/musai`). It is
+    /// derived from the executable's own path so a run from the checkout finds the `Info.plist`s it was built
+    /// beside, and `nil` when there is none — an install must say it cannot find its own halves, not guess.
+    private static func repositoryResources(from executable: URL) -> URL? {
+        var directory = executable.deletingLastPathComponent()
+        for _ in 0..<6 {
+            let candidate = directory.appending(path: "Resources")
+            if FileManager.default.fileExists(
+                atPath: candidate.appending(path: MusaiBundle.appInfoPlistName).path)
+            {
+                return candidate
+            }
+            let parent = directory.deletingLastPathComponent()
+            if parent.path == directory.path { break }
+            directory = parent
+        }
+        return nil
+    }
+
+    /// Loads the freshly written job and starts it: `bootout` first so re-installing reloads rather than fails
+    /// with "service already loaded", then `bootstrap`, which `RunAtLoad` starts. launchd's own errors are not
+    /// ours to raise — the plist and the person's next login are the durable part.
+    private static func loadAgent(plistAt plist: URL) {
+        launchctl(["bootout", "gui/\(getuid())/\(MusaiInstall.agentLabel)"])
+        launchctl(["bootstrap", "gui/\(getuid())", plist.path])
+    }
+
+    private static func launchctl(_ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
     }
 
     private static func emit(_ outcome: HookOutcome) {
