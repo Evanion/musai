@@ -21,6 +21,25 @@ private actor FatalOnceProbe {
     }
 }
 
+/// Collects the status strings an `EndpointState` publishes. Lock-protected, because an observer runs on
+/// whichever executor mutated the state.
+private final class StatusRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+
+    func record(_ text: String) {
+        lock.lock()
+        values.append(text)
+        lock.unlock()
+    }
+
+    var seen: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 @Suite struct AgentTests {
     /// A store in its own temporary directory, so every test's record, token and lock are its own.
     private static func temporaryStore() -> URL {
@@ -103,6 +122,32 @@ private actor FatalOnceProbe {
         #expect(await agent.statusText() == "storeFailed")
         await agent.state.requestRestart()
         #expect(await agent.statusText() == "needsRestart")
+    }
+
+    /// The status item is driven by this seam instead of a timer, so it has to be true that a change publishes
+    /// and an idle state stays silent.
+    @Test func aStatusChangeIsPublishedAndIdleIsSilent() async throws {
+        let store = Self.temporaryStore()
+        let agent = try MusaiAgent(libraryURL: store, detector: SilentDetector())
+        defer {
+            agent.stop()
+            try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
+        }
+
+        let recorder = StatusRecorder()
+        await agent.state.observeStatus { text in recorder.record(text) }
+        // Nothing has happened yet: an idle state publishes nothing.
+        #expect(recorder.seen.isEmpty)
+
+        await agent.state.setBacklogDepth(2)
+        #expect(recorder.seen == ["backlog(2)"])
+
+        // Setting the value it already holds is not a change.
+        await agent.state.setBacklogDepth(2)
+        #expect(recorder.seen == ["backlog(2)"])
+
+        await agent.state.requestRestart()
+        #expect(recorder.seen == ["backlog(2)", "needsRestart"])
     }
 
     @Test func itReopensAfterAFailedStoreState() async throws {

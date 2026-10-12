@@ -31,6 +31,11 @@ public actor EndpointState {
     private var curatorState: CuratorState = .idle
     private var askedToRestart = false
 
+    /// Handlers the status item drives itself from. Called synchronously from a mutation with the same string
+    /// `statusText()` returns, and never while nothing changes, so the item needs no timer and an idle agent
+    /// does nothing at all.
+    private var statusObservers: [@Sendable (String) -> Void] = []
+
     public init(
         storePath: String, startedAt: Date = Date(),
         protocolVersion: String = EndpointWire.protocolVersion
@@ -40,17 +45,46 @@ public actor EndpointState {
         self.protocolVersion = protocolVersion
     }
 
-    public func setStoreState(_ value: StoreState) { storeState = value }
+    /// Registers a handler for every future status change. It is not called on registration; the caller reads
+    /// `statusText()` once for the current value.
+    public func observeStatus(_ handler: @escaping @Sendable (String) -> Void) {
+        statusObservers.append(handler)
+    }
+
+    /// Tells every observer the new line. Called only by a mutation that actually changed something, so an
+    /// unchanged state — an idle agent — publishes nothing.
+    private func publishStatus() {
+        let text = statusText()
+        for observer in statusObservers { observer(text) }
+    }
+
+    public func setStoreState(_ value: StoreState) {
+        guard storeState != value else { return }
+        storeState = value
+        publishStatus()
+    }
 
     /// Mirrored from the queue at request time; the store is the truth.
-    public func setBacklogDepth(_ value: Int) { backlogDepth = value }
+    public func setBacklogDepth(_ value: Int) {
+        guard backlogDepth != value else { return }
+        backlogDepth = value
+        publishStatus()
+    }
 
-    public func setCuratorState(_ value: CuratorState) { curatorState = value }
+    public func setCuratorState(_ value: CuratorState) {
+        guard curatorState != value else { return }
+        curatorState = value
+        publishStatus()
+    }
 
     /// A restart was asked for. Answering the request is still this process's job — an endpoint that killed
     /// its own process could not answer the request it was given — so the request is recorded, and the agent
     /// (Task 5), which reads this, ends the process.
-    public func requestRestart() { askedToRestart = true }
+    public func requestRestart() {
+        guard !askedToRestart else { return }
+        askedToRestart = true
+        publishStatus()
+    }
 
     public var restartRequested: Bool { askedToRestart }
 

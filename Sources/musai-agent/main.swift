@@ -34,49 +34,45 @@ private func bootOutAndExit() -> Never {
     exit(0)
 }
 
-/// Redraws the status item from the backend's own state on a short, nearly free timer, and only when the
-/// text changes — the store is never touched here, so an idle agent does no work beyond a memory read.
-/// A pending restart ends the process, which is the whole point of `KeepAlive`.
-///
-/// The read runs off the main actor, and the update hops back through `RunLoop.main.perform`. Observed while
-/// building this: `NSApplication.run()` occupies the main actor so a main-actor `Task` never resumes, and the
-/// main dispatch queue is not drained either — only the run loop's own block source runs. Using whichever is
-/// drained, rather than the obvious one, is what keeps the title from sitting at "starting".
-private final class StatusTicker: NSObject, @unchecked Sendable {
-    private let agent: MusaiAgent
+/// Renders the backend's status into the menu-bar item. Driven by `EndpointState`'s change notification, not a
+/// timer: `render` is called only when the state actually changes, so an idle agent does no work on the item.
+private final class StatusPresenter: NSObject, @unchecked Sendable {
     private let item: NSStatusItem
     private let line: NSMenuItem
-    /// Touched only on the main queue.
+    private let lock = NSLock()
     private var shown = ""
 
-    init(agent: MusaiAgent, item: NSStatusItem, line: NSMenuItem) {
-        self.agent = agent
+    init(item: NSStatusItem, line: NSMenuItem) {
         self.item = item
         self.line = line
     }
 
-    @objc func tick() {
-        Task.detached { [self] in
-            if await agent.restartRequested() { exit(0) }
-            let text = await agent.statusText()
-            RunLoop.main.perform {
-                guard text != self.shown else { return }
-                self.shown = text
-                self.item.button?.title = "Musai: \(text)"
-                self.line.title = text
-            }
+    /// Called from the state's observer, on whichever thread mutated the state. A status item may only be
+    /// touched on the main thread, so the write hops to the main queue — which the running run loop drains.
+    func render(_ text: String) {
+        lock.lock()
+        let changed = text != shown
+        if changed { shown = text }
+        lock.unlock()
+        guard changed else { return }
+        DispatchQueue.main.async { [self] in
+            item.button?.title = "Musai: \(text)"
+            line.title = text
         }
     }
 }
 
-/// One menu item's target: Quit. It is held by the app for the process's life.
+/// One menu item's target: Quit.
 @MainActor
 private final class QuitTarget: NSObject {
+    /// A single instance held for the process's life. `NSMenuItem.target` is a *weak* reference, so a
+    /// function-local target would be deallocated and clicking Quit would silently do nothing.
+    static let shared = QuitTarget()
     @objc func quit(_ sender: Any?) { bootOutAndExit() }
 }
 
-/// Builds the menu-bar item and runs the app. Synchronous, so the timer is scheduled on the run loop that is
-/// about to run rather than inside a suspension.
+/// Builds the menu-bar item and runs the app. Called from the synchronous top level (no `await` before it), so
+/// the process has a plain `main`.
 @MainActor
 private func runStatusItem(agent: MusaiAgent) -> Never {
     let app = NSApplication.shared
@@ -94,20 +90,37 @@ private func runStatusItem(agent: MusaiAgent) -> Never {
     menu.addItem(.separator())
     let quitItem = NSMenuItem(
         title: "Quit Musai", action: #selector(QuitTarget.quit(_:)), keyEquivalent: "q")
-    let quitTarget = QuitTarget()
-    quitItem.target = quitTarget
+    quitItem.target = QuitTarget.shared
     menu.addItem(quitItem)
     statusItem.menu = menu
 
-    let ticker = StatusTicker(agent: agent, item: statusItem, line: statusLine)
-    Timer.scheduledTimer(
-        timeInterval: 1.5, target: ticker, selector: #selector(StatusTicker.tick), userInfo: nil,
-        repeats: true)
+    let presenter = StatusPresenter(item: statusItem, line: statusLine)
+
+    // The item is driven by the state, not a timer. The observer is registered before `start()` so no change
+    // can land before anyone is listening, and `start()` runs off the main actor while the run loop runs. A
+    // requested restart ends the process, which is the whole point of `KeepAlive`.
+    Task.detached {
+        await agent.state.observeStatus { text in
+            presenter.render(text)
+            if text == "needsRestart" { exit(0) }
+        }
+        do {
+            _ = try await agent.start()
+        } catch {
+            // A store already held, or a listener that cannot bind: one line, non-zero, and launchd decides.
+            fail("\(error)")
+        }
+        presenter.render(await agent.statusText())
+    }
 
     app.run()
     exit(0)
 }
 
+// Synchronous top level: the store is opened inside the run loop's task above, so there is no `await` here and
+// the process has a plain `main`. Deliberate — with top-level `await` (an async main) the main actor stays
+// occupied by `NSApplication.run()`, and neither main-actor tasks nor main-queue blocks resume, so the status
+// item's updates would never be applied. Reproduced with a standalone AppKit script.
 let arguments = Array(CommandLine.arguments.dropFirst())
 let store = libraryURL(from: arguments)
 
@@ -115,13 +128,6 @@ let agent: MusaiAgent
 do {
     agent = try MusaiAgent(libraryURL: store)
 } catch {
-    fail("\(error)")
-}
-
-do {
-    _ = try await agent.start()
-} catch {
-    // A store already held, or a listener that cannot bind: one line, non-zero, and launchd decides.
     fail("\(error)")
 }
 
