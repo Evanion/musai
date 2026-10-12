@@ -99,4 +99,37 @@ import Testing
         let after = try await backend.library.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
         #expect(after.map(\.text) == [event.text])
     }
+
+    @Test func proposalsAndGapRefuseAnIncompatibleHelper() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        // The gate has to hold on every route, not most of them: a listing from a helper of another major is
+        // just as unreadable as a capture, so `musai review` must refuse rather than talk to it.
+        let client = MusaiClient(record: backend.record(protocolVersion: "2.0"), token: BackendFixture.token)
+        let refusal = MusaiClient.Failure.incompatibleProtocol(
+            helper: "2.0", expected: EndpointWire.protocolVersion)
+        await #expect(throws: refusal) { _ = try await client.proposals() }
+        await #expect(throws: refusal) { _ = try await client.gap() }
+    }
+
+    @Test func aLiveHandshakeOfAnotherMajorIsRefusedEvenWhenTheRecordAgrees() async throws {
+        // The record says 1.0 (the fixture's default) and the live helper answers 2.0. The helper is what would
+        // store the words, so the handshake — not the record alone — is the source of truth.
+        let backend = try await BackendFixture.make(protocolVersion: "2.0")
+        defer { backend.close() }
+        let record = backend.record()
+        #expect(record.protocolVersion == EndpointWire.protocolVersion)
+        let client = MusaiClient(record: record, token: BackendFixture.token)
+
+        #expect(await client.health()?.protocolVersion == "2.0")
+        await #expect(
+            throws: MusaiClient.Failure.incompatibleProtocol(
+                helper: "2.0", expected: EndpointWire.protocolVersion)
+        ) {
+            try await client.capture(turn("words a helper of another major must not store"))
+        }
+
+        let rows = try await backend.library.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
+        #expect(rows.isEmpty)
+    }
 }

@@ -22,15 +22,22 @@ public actor EndpointState {
     /// The one store this process serves. A client that expected another reads this and says so, rather
     /// than writing where it was not expected.
     public let storePath: String
+    /// The protocol this process serves. It is the wire's own by default; a test injects another so a client
+    /// can be shown refusing a helper of a different major.
+    public let protocolVersion: String
 
     private var storeState: StoreState = .open
     private var backlogDepth = 0
     private var curatorState: CuratorState = .idle
     private var askedToRestart = false
 
-    public init(storePath: String, startedAt: Date = Date()) {
+    public init(
+        storePath: String, startedAt: Date = Date(),
+        protocolVersion: String = EndpointWire.protocolVersion
+    ) {
         self.storePath = storePath
         self.startedAt = startedAt
+        self.protocolVersion = protocolVersion
     }
 
     public func setStoreState(_ value: StoreState) { storeState = value }
@@ -50,7 +57,7 @@ public actor EndpointState {
     /// The `/health` body.
     public func health() -> EndpointHealth {
         EndpointHealth(
-            protocolVersion: EndpointWire.protocolVersion,
+            protocolVersion: protocolVersion,
             storePath: storePath,
             startedAt: startedAt,
             storeState: storeState,

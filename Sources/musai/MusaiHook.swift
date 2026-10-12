@@ -62,20 +62,23 @@ struct MusaiHook {
     /// is the cue to ask launchd to start the agent and wait a moment; if it still does not answer, the caller
     /// reports the fact rather than posting into a port it does not own.
     static func connectedClient() async -> MusaiClient? {
-        if let client = recordedClient(), await client.health() != nil { return client }
+        if let client = await handshakenClient() { return client }
         startAgent()
         let deadline = Date().addingTimeInterval(startWait)
         while Date() < deadline {
-            if let client = recordedClient(), await client.health() != nil { return client }
+            if let client = await handshakenClient() { return client }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return nil
     }
 
-    /// The client the record and the token describe, without asking whether it answers yet.
-    static func recordedClient() -> MusaiClient? {
+    /// The client, with the handshake it just made attached: the operation's own compatibility check then
+    /// costs no second round trip. `nil` when the record or the token is missing, or nothing answers.
+    static func handshakenClient() async -> MusaiClient? {
         guard let record = try? HelperRecord.read(), let token = MusaiToken.read() else { return nil }
-        return MusaiClient(record: record, token: token)
+        let probe = MusaiClient(record: record, token: token)
+        guard let health = await probe.health() else { return nil }
+        return MusaiClient(record: record, token: token, handshake: health)
     }
 
     /// Ask launchd for the agent. Its own failure is a diagnostic the person can read elsewhere, not a crash.
@@ -109,40 +112,43 @@ struct MusaiHook {
     }
 }
 
-/// `musai review`, over the endpoint instead of the store: the gap first, then one key per proposal. Its shape
-/// mirrors `ReviewSession.run`, because it is the same conversation with a different door.
-struct Review: Sendable {
+/// `musai review`, over the endpoint instead of the store: the gap first, then one key per proposal. Input and
+/// output are injected so the loop can be driven by a test, not only by a person at a terminal.
+struct Review {
     let client: MusaiClient
+    var read: () -> String? = { readLine() }
+    var write: (String) -> Void = { print($0) }
+    var diagnose: (String) -> Void = { FileHandle.standardError.write(Data("musai: \($0)\n".utf8)) }
 
     func run() async {
         do {
             let gap = try await client.gap()
             if !gap.isEmpty {
-                print("\(gap.count) decision\(gap.count == 1 ? "" : "s") were settled and never recorded anywhere:")
-                for entry in gap { print("  · \(entry.title)") }
-                print("")
+                write("\(gap.count) decision\(gap.count == 1 ? "" : "s") were settled and never recorded anywhere:")
+                for entry in gap { write("  · \(entry.title)") }
+                write("")
             }
 
             let proposals = try await client.proposals()
             guard !proposals.isEmpty else {
-                if gap.isEmpty { print("nothing pending") }
+                if gap.isEmpty { write("nothing pending") }
                 return
             }
 
             for (index, proposal) in proposals.enumerated() {
                 var headline = "[\(index + 1)/\(proposals.count)] \(proposal.title)   (\(proposal.act.displayName)"
                 if let said = proposal.said { headline += ", said: \"\(said)\"" }
-                print(headline + ")")
-                if let rationale = proposal.rationale { print("  \(rationale)") }
-                print("  [y] settled, landed nowhere   [r] settled, landed at…   [d] drop   [s] skip")
+                write(headline + ")")
+                if let rationale = proposal.rationale { write("  \(rationale)") }
+                write("  [y] settled, landed nowhere   [r] settled, landed at…   [d] drop   [s] skip")
 
-                guard let answer = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard let answer = read()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 else { break }
                 switch answer {
                 case "y":
                     try await client.apply(.settle, to: proposal.id)
                 case "r":
-                    guard let reference = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    guard let reference = read()?.trimmingCharacters(in: .whitespacesAndNewlines),
                         !reference.isEmpty
                     else { continue }
                     try await client.apply(.persist(documentRef: reference), to: proposal.id)
@@ -154,7 +160,7 @@ struct Review: Sendable {
                 }
             }
         } catch {
-            FileHandle.standardError.write(Data("musai: \(oneLine(error))\n".utf8))
+            diagnose(oneLine(error))
         }
     }
 }

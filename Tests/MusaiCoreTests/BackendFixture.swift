@@ -19,13 +19,17 @@ struct BackendFixture {
     let port: UInt16
 
     /// A file-backed store (serving one is the endpoint's whole job), a state that knows its path, and a
-    /// curator whose debounce is parked so no drain runs mid-test.
-    static func make(detector: any DecisionDetector = SilentDetector()) async throws -> BackendFixture {
+    /// curator whose debounce is parked so no drain runs mid-test. `protocolVersion` is what `/health`
+    /// reports, so a test can stand a helper the client must refuse.
+    static func make(
+        detector: any DecisionDetector = SilentDetector(),
+        protocolVersion: String = EndpointWire.protocolVersion
+    ) async throws -> BackendFixture {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "musai-client-\(UUID().uuidString)")
         let store = directory.appending(path: "Musai.norvo")
         let library = try await MusaiLibrary.open(at: store)
-        let state = EndpointState(storePath: store.path)
+        let state = EndpointState(storePath: store.path, protocolVersion: protocolVersion)
         let controller = CuratorController(
             db: library.db, detector: detector,
             sleep: { _ in try? await Task.sleep(for: .seconds(3_600)) }, debounce: 1)

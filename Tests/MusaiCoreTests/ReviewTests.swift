@@ -25,7 +25,6 @@ import Testing
         let review = ReviewSession(db: lib.db)
         #expect(try await review.pending().isEmpty)
         #expect(try await review.unpersisted().isEmpty)
-        #expect(try await review.run(as: MusaiActors.user) == 0)
     }
 
     @Test func settlePutsTheDecisionInTheGap() async throws {

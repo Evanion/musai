@@ -19,12 +19,17 @@ public struct MusaiClient: Sendable {
     public let record: HelperRecord
     public let token: String
 
+    /// The handshake a caller already made, if it made one. When present it is reused rather than re-fetched,
+    /// so a client that checked `/health` before it posted pays for that check only once.
+    private let handshake: EndpointHealth?
+
     private let baseURL: URL
     private let session: URLSession
 
-    public init(record: HelperRecord, token: String) {
+    public init(record: HelperRecord, token: String, handshake: EndpointHealth? = nil) {
         self.record = record
         self.token = token
+        self.handshake = handshake
         self.baseURL = URL(string: "http://127.0.0.1:\(record.port)")!
         self.session = .shared
     }
@@ -51,7 +56,7 @@ public struct MusaiClient: Sendable {
     /// The `POST /capture` body, already normalized by the host adapter. Throws before sending when the helper
     /// advertises a protocol this client cannot speak, so a mismatched helper's store is never written.
     public func capture(_ event: NormalizedEvent) async throws -> CaptureOutcome {
-        try ensureCompatible()
+        try await ensureCompatible()
         let (data, response) = try await post(
             path: "capture", body: try EndpointWire.encoder().encode(event))
         try ensureSuccess(response, data)
@@ -61,7 +66,7 @@ public struct MusaiClient: Sendable {
     /// The slice for a working directory, or `nil` when the backend has nothing to say there. An empty body is
     /// silence, not an error.
     public func context(cwd: String) async throws -> String? {
-        try ensureCompatible()
+        try await ensureCompatible()
         let (data, response) = try await get(path: "context", query: ["cwd": cwd])
         try ensureSuccess(response, data)
         let text = String(decoding: data, as: UTF8.self)
@@ -80,7 +85,7 @@ public struct MusaiClient: Sendable {
 
     /// One action, applied as the person. `skip` is the absence of an action, so it never reaches the wire.
     public func apply(_ action: ReviewAction, to id: UUID) async throws {
-        try ensureCompatible()
+        try await ensureCompatible()
         switch action {
         case .skip:
             return
@@ -97,6 +102,7 @@ public struct MusaiClient: Sendable {
     // MARK: - The wire
 
     private func proposalsReply() async throws -> ProposalsReply {
+        try await ensureCompatible()
         let (data, response) = try await get(path: "proposals", query: [:])
         try ensureSuccess(response, data)
         return try decode(ProposalsReply.self, from: data)
@@ -107,10 +113,21 @@ public struct MusaiClient: Sendable {
         try ensureSuccess(response, data)
     }
 
-    private func ensureCompatible() throws {
-        guard Self.accepts(protocolVersion: record.protocolVersion) else {
+    /// Every route holds the same bound: the record's advertised major and the live helper's must both be the
+    /// one this client speaks. The record alone is unsafe one way — a helper upgraded past the record's word
+    /// would be posted to — so the handshake is checked too, reusing a caller's handshake when it made one.
+    private func ensureCompatible() async throws {
+        try requireCompatible(record.protocolVersion)
+        let live: EndpointHealth?
+        if let handshake { live = handshake } else { live = await health() }
+        guard let live else { throw Failure.unreachable }
+        try requireCompatible(live.protocolVersion)
+    }
+
+    private func requireCompatible(_ version: String) throws {
+        guard Self.accepts(protocolVersion: version) else {
             throw Failure.incompatibleProtocol(
-                helper: record.protocolVersion, expected: EndpointWire.protocolVersion)
+                helper: version, expected: EndpointWire.protocolVersion)
         }
     }
 
