@@ -109,9 +109,17 @@ Silicon; SwiftUI; local-first with no metered cloud observer; host-agnostic, not
 
 Added or sharpened here:
 
-- **Hooks are the only reliable capture point.** Both sides of the exchange arrive through the host's hook
-  channel, which the main design already establishes (§8, §10). The user's turn is available there — that is
-  how claude-mem collected 17,674 of them — so no host transcript file is parsed.
+- **Hooks are the only reliable capture point.** The user's turn arrives *in the hook's own payload* — Claude
+  Code's `UserPromptSubmit` hands over `user_prompt` directly — so the user's side needs no transcript at all.
+  That is how claude-mem collected 17,674 of them. *Checked against the installed host:* Claude Code 2.1.295,
+  whose hook payloads are `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`, plus
+  `user_prompt` on `UserPromptSubmit`, `tool_name`/`tool_input`/`tool_result` on `PostToolUse`, and `reason`
+  on `Stop`.
+- **One narrow exception, for the agent's own last message.** The `Stop` hook carries no assistant text, so
+  the agent's final message is read from the `transcript_path` the hook hands over — text blocks only,
+  truncated, and isolated in that host's adapter. This is the only transcript read in the system, and it
+  exists because the alternative is to lose the agent's own account of what it did and why. It is not a
+  licence to parse transcripts for anything else.
 - **The queue is appended rows in the graph, not the engine's log.** *Verified:* Norvo Lite exposes no
   app-facing log or change feed — the C ABI has no log read, and NorvoQL generates no `commits`/`changes`
   root — so the main design's assumption (§7, and the writer's call in §17) that "Lite's log and change feed
@@ -230,11 +238,13 @@ matrix are built on the answer.
 
 ## 10. Calls made while writing this (for review)
 
-- **Capture the exchange, not transcripts.** The user's turn is taken from the hook channel, not by parsing
-  host transcript files, consistent with the main design's §8. *Checked, not assumed:* of the hosts
-  claude-mem saw, all three delivered the user's own prompts — `claude` 16,675, `cursor` 964, `opencode` 40.
-  So Claude Code, OpenCode and Cursor expose it; Codex and Pi are unverified and are checked when they are
-  added. A host offering only the agent's side becomes a per-host decision then, not a redesign now.
+- **Capture the exchange, not transcripts.** The user's turn arrives in the hook payload, not by parsing a
+  transcript. *Checked, not assumed:* of the hosts claude-mem saw, all three delivered the user's own prompts —
+  `claude` 16,675, `cursor` 964, `opencode` 40. And Claude Code 2.1.295 does hand `user_prompt` to
+  `UserPromptSubmit`, so the mechanism is in the payload, not inferred. Codex and Pi are unverified and are
+  checked when they are added.
+- **The agent's last message is the one transcript read** — see §5. It is the price of keeping the agent's own
+  account of its work, and it belongs to one host adapter, not to the core.
 - **The queue is the expiring `Event` tier, not the engine's log.** *Checked:* no app-facing log or change
   feed exists in the C ABI or in NorvoQL's generated roots. Worth a Norvo issue for a log read-cursor; not on
   the critical path.

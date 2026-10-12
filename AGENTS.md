@@ -11,11 +11,13 @@ package).
 - **Design:** `docs/superpowers/specs/2026-10-12-musai-design.md` — **approved 2026-10-12**.
 - **Session handoff:** `HANDOFF.md` — the context from the design conversation, the
   decisions made, and the environment facts.
-- **Status:** the design is approved (2026-10-12) and the data-model plan
-  (`docs/superpowers/plans/2026-10-12-musai-data-model.md`) is **built and merged**: `MusaiCore` holds the
-  project graph on Norvo Lite — schema, operations, `MusaiLibrary`, `ProjectBinder` — with 27 tests green.
-  Next in build order (`§16.1`'s second half): the **claude-mem migration** — a mapping of claude-mem's
-  structure and data linkage onto Musai's, not a row import.
+- **Status:** the design is approved (2026-10-12), the data model is **built and merged** (`MusaiCore`, 27 tests),
+  and the next slice is designed and planned: the decision loop —
+  `docs/superpowers/specs/2026-10-12-musai-decision-loop-design.md` and
+  `docs/superpowers/plans/2026-10-12-musai-decision-loop.md` (10 tasks, Claude Code first).
+  That design amends the main design's §3 non-goal and §9 authoring mechanism, and it reorders the build:
+  the loop comes before the claude-mem **migration**, which is evidence that seeds the graph rather than a
+  row import.
 
 ## Working conventions
 
