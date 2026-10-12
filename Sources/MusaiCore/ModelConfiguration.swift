@@ -24,7 +24,7 @@ public struct ModelConfiguration: Codable, Sendable, Equatable {
         baseURL: "http://127.0.0.1:11434/v1",
         model: "qwen3.6:27b",
         apiKeyEnv: nil,
-        timeoutSeconds: 120,
+        timeoutSeconds: 60,
         maxTokens: 2_048)
 
     public static var defaultFileURL: URL {

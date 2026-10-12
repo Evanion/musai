@@ -24,10 +24,14 @@ public struct HookRunner: Sendable {
 
     public let capture: MusaiCapture
     public let library: MusaiLibrary
+    /// The curator's model. `nil` reads `ModelConfiguration` on each drain, so a running app picks up a config
+    /// change; a test passes a provider and never touches the network.
+    public let provider: (any ModelProvider)?
 
-    public init(capture: MusaiCapture, library: MusaiLibrary) {
+    public init(capture: MusaiCapture, library: MusaiLibrary, provider: (any ModelProvider)? = nil) {
         self.capture = capture
         self.library = library
+        self.provider = provider
     }
 
     public func run(event: String?, stdin: Data, cwd: String, at: Date = Date()) async -> HookOutcome {
@@ -59,15 +63,13 @@ public struct HookRunner: Sendable {
                 // The curator drains what the queue now holds. A model that is down must not fail the hook and
                 // must not lose the events: nothing is marked drained unless the proposals were written, so the
                 // next drain retries them.
-                if let project = try? await ProjectBinder(db: library.db).bind(
-                    cwd: URL(fileURLWithPath: cwd), memorySessionId: session, platform: "claude",
-                    startedAt: at, as: MusaiActors.curator).projectSlug,
-                    let configuration = try? ModelConfiguration.load()
+                if let resolved = Self.resolveProvider(provider),
+                    let project = try? await ProjectBinder(db: library.db).bind(
+                        cwd: URL(fileURLWithPath: cwd), memorySessionId: session, platform: "claude",
+                        startedAt: at, as: MusaiActors.curator).projectSlug
                 {
                     let curator = ProposalCurator(
-                        db: library.db,
-                        detector: ModelDecisionDetector(
-                            provider: OpenAICompatibleProvider(configuration: configuration)))
+                        db: library.db, detector: ModelDecisionDetector(provider: resolved))
                     _ = try? await curator.drain(project: project, as: MusaiActors.curator)
                 }
                 return .silent
@@ -85,6 +87,12 @@ public struct HookRunner: Sendable {
         } catch {
             return HookOutcome(stdout: nil, diagnostic: "musai: \(Self.oneLine(error))")
         }
+    }
+
+    /// A provider given to us, or the one the configuration names right now.
+    static func resolveProvider(_ given: (any ModelProvider)?) -> (any ModelProvider)? {
+        if let given { return given }
+        return (try? ModelConfiguration.load()).map { OpenAICompatibleProvider(configuration: $0) }
     }
 
     static func bounded(_ data: Data) -> Data {

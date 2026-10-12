@@ -44,6 +44,19 @@ Then work a session as usual, run `musai review` to confirm what the curator pro
 to see what the agent is handed. `docs/claude-code-hooks.md` has each hook, its timeout, the model
 configuration, and how to uninstall.
 
+## Try the loop by hand
+
+```sh
+musai install --claude-code
+# work a session in Claude Code as usual, then:
+musai review            # confirm or correct what the curator proposes
+# start a new session and read what the agent is handed
+```
+
+The question this slice exists to answer is the one a test cannot: **did confirming those proposals feel like
+one keystroke, or like clerk work?** That answer decides whether the model changes and the rest of the host
+matrix are worth building, so it belongs in the next design rather than in someone's memory.
+
 ## Layout
 
 ```

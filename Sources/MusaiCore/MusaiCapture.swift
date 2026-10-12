@@ -19,9 +19,7 @@ public struct MusaiCapture: Sendable {
         let capped = Self.truncated(text, to: Self.maxTextBytes)
         let rows = try await db.query(UtterancesForSessionQuery(.init(session: session))).utterances
         let utterance: UUID
-        if let found = rows.first(where: {
-            $0.speaker == .user && $0.text == capped && Self.sameInstant($0.at, at)
-        }) {
+        if let found = rows.first(where: { $0.speaker == .user && $0.text == capped }) {
             utterance = found.id
         } else {
             utterance = try await db.mutate(
@@ -32,9 +30,7 @@ public struct MusaiCapture: Sendable {
         // The queue holds the exchange in order, so the user's turn is there too — and its durable copy is the
         // row a proposal links to, which is why it is written first.
         let queued = try await db.query(EventsForSessionQuery(.init(session: session))).events
-        if !queued.contains(where: {
-            $0.kind == .userTurn && $0.text == capped && Self.sameInstant($0.at, at)
-        }) {
+        if !queued.contains(where: { $0.kind == .userTurn && $0.text == capped }) {
             _ = try await db.mutate(
                 RecordEventMutation(.init(kind: .userTurn, at: at, text: capped, session: session)), as: actor)
         }
@@ -48,7 +44,7 @@ public struct MusaiCapture: Sendable {
         try await bind(session: session, cwd: cwd, origin: nil, at: at, as: actor)
         let capped = Self.truncated(text, to: Self.maxTextBytes)
         let rows = try await db.query(EventsForSessionQuery(.init(session: session))).events
-        if rows.contains(where: { $0.kind == .agentTurn && $0.text == capped && Self.sameInstant($0.at, at) }) {
+        if rows.contains(where: { $0.kind == .agentTurn && $0.text == capped }) {
             return nil
         }
         let made = try await db.mutate(
