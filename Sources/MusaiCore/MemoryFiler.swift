@@ -31,8 +31,8 @@ public protocol MemoryFiler: Sendable {
 /// What the producer may put in the graph, named once so the prompt a model is asked with, the schema that
 /// shapes its answer and the boundary that writes it cannot drift apart.
 public enum AmbientMemory {
-    /// The most one filer call may add. A long session backfills the graph; it does not flood it, and Lite's
-    /// single writer is shared with capture.
+    /// The most one drain may add, across every session its batch spans. A long session backfills the graph; it
+    /// does not flood it, and Lite's single writer is shared with capture.
     public static let maxPerDrain = 3
 
     /// The longest a memory's text may be, in characters: an ambient memory is read at a glance.

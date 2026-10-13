@@ -29,6 +29,10 @@ public actor CuratorController {
     public private(set) var curatorState: CuratorState = .idle
     /// How many drains have run. A debounce test reads it to prove a burst drove exactly one.
     public private(set) var drainCount = 0
+    /// How many filer calls have failed. A misconfigured producer — no model at the configured endpoint — loses
+    /// its batch's ambient memory on every drain while the store stays healthy, so this count is the one thing
+    /// at runtime that says the producer is down rather than idle.
+    public private(set) var filerFailures = 0
 
     private var debounceTask: Task<Void, Never>?
     private var runningDrain: Task<Int, Error>?
@@ -144,10 +148,13 @@ public actor CuratorController {
     ///
     /// A filer that throws costs this batch its ambient memory and nothing else: the decisions from this same
     /// drain are already written, the queue is drained, and the curator still returns to `idle`. The failure is
-    /// swallowed rather than reported up, because a model that is unreachable is not a fact about the store —
-    /// `onFatal` is for the store, and this is the producer.
+    /// not reported up — a model that is unreachable is not a fact about the store, and `onFatal` is for the
+    /// store — but it is counted in `filerFailures`, so a producer that is down rather than idle is visible.
     private func fileAmbientMemory(_ batches: [SessionBatch]) async throws {
         guard let filer else { return }
+        // The bound belongs to the drain, not to a batch: a queue spanning several sessions may not write
+        // `maxPerDrain` per session. What one session's batch lands comes off what the next may.
+        var remaining = AmbientMemory.maxPerDrain
         for batch in batches {
             let offered: [DetectedMemory]
             do {
@@ -155,20 +162,26 @@ public actor CuratorController {
             } catch {
                 // The batch loses its ambient memory and the drain keeps everything else. A model that is down
                 // costs the backfill; it does not cost the decisions, and it is not retried — the queue this
-                // batch came from is drained by now.
+                // batch came from is drained by now. It is counted, so `/health` staying green does not mean a
+                // misconfigured producer is filing nothing: this is the note.
+                filerFailures += 1
                 continue
             }
-            // The bound is the writer's, not the filer's: a filer is free to offer more, and what lands is at
-            // most `maxPerDrain` memories.
-            let memories = offered.prefix(AmbientMemory.maxPerDrain)
+            let memories = offered.prefix(remaining)
             guard !memories.isEmpty else { continue }
-            try await db.transaction(as: MusaiActors.curator) { tx in
+            remaining -= try await db.transaction(as: MusaiActors.curator) { tx in
+                var wrote = 0
                 for memory in memories {
                     // Cut at the one boundary every filer's answer goes through, and truncated rather than
-                    // refused: a long line is still what happened.
+                    // refused: a long line is still what happened. Narrative is cut on the same terms as text:
+                    // `MemoryFiler` is public, so a third-party filer's narrative may not be the one field
+                    // that lands unbounded.
                     let text = String(memory.text.prefix(AmbientMemory.maxTextCharacters))
                     guard !text.isEmpty else { continue }
                     let kind = AmbientMemory.filedKind(memory.kind)
+                    let narrative = memory.narrative.map {
+                        String($0.prefix(AmbientMemory.maxTextCharacters))
+                    }
                     // An empty list is spelled `nil`: the engine refuses an empty array for a `[String!]`
                     // variable (`variable $concepts: String does not take tag 85`), and a memory with no
                     // concepts is a memory with none.
@@ -177,17 +190,19 @@ public actor CuratorController {
                         _ = try await tx.mutate(
                             RecordMemoryForSessionMutation(
                                 .init(
-                                    kind: kind, origin: .ambient, text: text, narrative: memory.narrative,
+                                    kind: kind, origin: .ambient, text: text, narrative: narrative,
                                     concepts: concepts, slug: slug,
                                     memorySessionId: batch.session)))
                     } else {
                         _ = try await tx.mutate(
                             RecordMemoryUnboundMutation(
                                 .init(
-                                    kind: kind, origin: .ambient, text: text, narrative: memory.narrative,
+                                    kind: kind, origin: .ambient, text: text, narrative: narrative,
                                     concepts: concepts, memorySessionId: batch.session)))
                     }
+                    wrote += 1
                 }
+                return wrote
             }
         }
     }

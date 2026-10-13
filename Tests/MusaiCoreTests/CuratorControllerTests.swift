@@ -260,6 +260,9 @@ private struct GatedDetector: DecisionDetector {
         await controller.noteCapture()
         _ = try await controller.drainNow()
 
+        // Nothing failed, so nothing is counted against the producer.
+        #expect(await controller.filerFailures == 0)
+
         // It was asked about the events this drain consumed — the turn that was just captured.
         let asked = try #require(await filer.asked.first)
         #expect(await filer.asked.count == 1)
@@ -292,6 +295,8 @@ private struct GatedDetector: DecisionDetector {
 
         // The filer really was asked: a controller that never called it would pass this test vacuously.
         #expect(await filer.calls == 1)
+        // And the failure is not silent at runtime: a misconfigured producer shows up as a count.
+        #expect(await controller.filerFailures == 1)
         let pending = try await lib.db.query(PendingDecisionsQuery()).decisions
         #expect(pending.map(\.title) == ["One Norvo file"])
         #expect(await controller.curatorState == .idle)

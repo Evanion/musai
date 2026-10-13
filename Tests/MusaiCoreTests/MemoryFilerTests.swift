@@ -68,10 +68,17 @@ struct ProposingDetector: DecisionDetector {
             text: text, at: at, origin: "claude", session: "s1", cwd: cwd, as: MusaiActors.curator)
     }
 
-    /// The project the captured session bound to — where the drain's memories have to land.
-    private func slug(_ lib: MusaiLibrary) async throws -> String {
+    /// A turn in another session, bound to a project of its own: one drain's batch can span sessions, and what
+    /// the drain writes has to stay under the bound across all of them.
+    private func turn(_ lib: MusaiLibrary, _ text: String, session: String, cwd: String) async throws {
+        _ = try await MusaiCapture(db: lib.db).captureUserTurn(
+            text: text, at: at, origin: "claude", session: session, cwd: cwd, as: MusaiActors.curator)
+    }
+
+    /// The project the named session bound to — where the drain's memories have to land.
+    private func slug(_ lib: MusaiLibrary, session: String = "s1") async throws -> String {
         try #require(
-            try await lib.db.query(SessionByMemoryIdQuery(.init(memorySessionId: "s1"))).session?.project?.slug)
+            try await lib.db.query(SessionByMemoryIdQuery(.init(memorySessionId: session))).session?.project?.slug)
     }
 
     private func drain(_ lib: MusaiLibrary, filer: any MemoryFiler) async throws {
@@ -80,8 +87,11 @@ struct ProposingDetector: DecisionDetector {
         _ = try await controller.drainNow()
     }
 
-    private func filed(_ lib: MusaiLibrary) async throws -> [MemoriesForProjectQuery.Data.Memories] {
-        try await lib.db.query(MemoriesForProjectQuery(.init(slug: try await slug(lib)))).memories
+    private func filed(
+        _ lib: MusaiLibrary, session: String = "s1"
+    ) async throws -> [MemoriesForProjectQuery.Data.Memories] {
+        try await lib.db.query(
+            MemoriesForProjectQuery(.init(slug: try await slug(lib, session: session)))).memories
     }
 
     /// Every decision the store holds, whichever list a client would read it from.
@@ -150,6 +160,60 @@ struct ProposingDetector: DecisionDetector {
         // Exactly the bound: one filer asked fifty, and fifty written would mean the bound is a promise rather
         // than a limit.
         #expect(memories.count == AmbientMemory.maxPerDrain)
+    }
+
+    /// The bound is the drain's, not a session's. A queue spanning two sessions asks each of them, and what
+    /// lands across both is at most `maxPerDrain` — the second session's slice is cut by what the first took.
+    /// The filer's batches also come in queue order, and each session's memory binds to that session's project.
+    @Test func theProducerIsBoundedAcrossSessions() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let filer = OfferingFiler(offering: [
+            DetectedMemory(kind: .fact, text: "one file holds the graph", narrative: nil, concepts: []),
+            DetectedMemory(kind: .lesson, text: "two files cost a lock", narrative: nil, concepts: []),
+        ])
+        // Two sessions in one queue, in this order, each bound to a project of its own.
+        try await turn(lib, "the first session", session: "s1", cwd: cwd)
+        try await turn(lib, "the second session", session: "s2", cwd: "/tmp/musai-producer-two")
+        try await drain(lib, filer: filer)
+
+        // Asked once per session, in queue order — the grouping sees both, in the order they were captured.
+        let asked = await filer.asked
+        #expect(asked.count == 2)
+        #expect(asked.first?.compactMap(\.text) == ["the first session"])
+        #expect(asked.last?.compactMap(\.text) == ["the second session"])
+
+        // Two sessions offering two each wrote three, not four: the bound is the drain's, so the second
+        // session's slice is cut to what the first left.
+        let first = try await filed(lib, session: "s1")
+        let second = try await filed(lib, session: "s2")
+        #expect(first.count + second.count == AmbientMemory.maxPerDrain)
+        #expect(first.count == 2)
+        #expect(second.count == 1)
+
+        // And each session's memory is bound to that session, under its own project.
+        let firstSlug = try await slug(lib, session: "s1")
+        let secondSlug = try await slug(lib, session: "s2")
+        #expect(first.allSatisfy { $0.session?.memorySessionId == "s1" })
+        #expect(first.allSatisfy { $0.project?.slug == firstSlug })
+        #expect(second.allSatisfy { $0.session?.memorySessionId == "s2" })
+        #expect(second.allSatisfy { $0.project?.slug == secondSlug })
+    }
+
+    /// The write boundary that cuts text cuts narrative the same way: `MemoryFiler` is public, so a
+    /// third-party filer's narrative may not be the one field that lands unbounded.
+    @Test func theBoundaryCutsNarrativeLikeText() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        try await turn(lib)
+        let long = String(repeating: "n", count: AmbientMemory.maxTextCharacters + 50)
+        try await drain(
+            lib,
+            filer: OfferingFiler(offering: [
+                DetectedMemory(kind: .fact, text: "one file holds the graph", narrative: long, concepts: [])
+            ]))
+
+        let memories = try await filed(lib)
+        #expect(memories.count == 1)
+        #expect(memories.first?.narrative?.count == AmbientMemory.maxTextCharacters)
     }
 
     /// The model half of the same rules, read the way the decision detector's answer is read: a kind the
