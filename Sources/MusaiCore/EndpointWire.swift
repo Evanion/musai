@@ -206,9 +206,14 @@ public struct MemorySummary: Sendable, Equatable, Codable {
 /// The `GET /migrated` body: the imported, one-sided history, in the view of its own.
 public struct MigratedReply: Sendable, Equatable, Codable {
     public let proposals: [MigratedProposal]
+    /// Whether the store holds more migrated proposals than this reply carries. There are ~6 900 of them, so
+    /// the view shows a page of a long import rather than the whole of it, and says so rather than looking
+    /// like the complete backlog. Known by fetching one more than is returned, since the query has no count.
+    public let hasMore: Bool
 
-    public init(proposals: [MigratedProposal]) {
+    public init(proposals: [MigratedProposal], hasMore: Bool) {
         self.proposals = proposals
+        self.hasMore = hasMore
     }
 }
 

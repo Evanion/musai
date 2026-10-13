@@ -122,7 +122,7 @@ final class ClaudeMemCorpus {
     @discardableResult
     func observation(
         id: Int, memory: String, type: String = "discovery", title: String? = nil, facts: String? = nil,
-        narrative: String? = nil, concepts: String? = nil
+        narrative: String? = nil, concepts: String? = nil, at: Int = 1_700_000_000
     ) throws -> ClaudeMemCorpus {
         try exec("""
         INSERT INTO observations(
@@ -130,7 +130,7 @@ final class ClaudeMemCorpus {
             created_at_epoch)
         VALUES (\(id), \(Self.literal(memory)), 'claude-mem', NULL, \(Self.literal(type)),
             \(Self.literal(title)), \(Self.literal(facts)), \(Self.literal(narrative)),
-            \(Self.literal(concepts)), 1_700_000_000);
+            \(Self.literal(concepts)), \(at));
         """)
         return self
     }

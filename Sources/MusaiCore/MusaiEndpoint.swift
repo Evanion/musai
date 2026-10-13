@@ -73,7 +73,7 @@ public struct MusaiEndpoint: Sendable {
             case ("GET", "/memories"):
                 return try await memories(request, db: db)
             case ("GET", "/migrated"):
-                return try await migrated(db: db)
+                return try await migrated(request, db: db)
             case ("POST", "/admin/import"):
                 return try await importHistory(request, db: db)
             case ("POST", "/admin/restart"):
@@ -198,16 +198,15 @@ public struct MusaiEndpoint: Sendable {
     /// no project, which is most of an imported corpus. Nothing found is an empty list with a 200, never an
     /// error — a search that matches nothing and a project that does not exist are both ordinary answers.
     ///
-    /// A `q` is not narrowed by a `project`: the search operation has no project filter, and inventing one here
-    /// would mean either a fourth query or a filtered list that lies about its bound. `musai recall --project`
-    /// asks for the listing, and the search asks for the words.
+    /// A `q` and a `project` together search only that project's memories: the filter is the search's own, so a
+    /// project hit ranked below the whole-store bound is still found rather than silently missed.
     private func memories(_ request: EndpointRequest, db: Database) async throws -> EndpointResponse {
         let query = request.query["q"]
-        let project = request.query["project"]
+        let project = request.query["project"].flatMap { $0.isEmpty ? nil : $0 }
         let found: [MemorySummary]
         if let query, !query.isEmpty {
-            found = try await searched(query, db: db)
-        } else if let project, !project.isEmpty {
+            found = try await searched(query, project: project, db: db)
+        } else if let project {
             found = try await db.query(MemoriesForProjectQuery(.init(slug: project))).memories.map {
                 Self.summary($0)
             }
@@ -219,20 +218,13 @@ public struct MusaiEndpoint: Sendable {
 
     /// The full-text hits, as the reply's shape.
     ///
-    /// The search's own projection is deliberately the fields that rank a hit; the reply promises the memory's
-    /// full shape, so each hit is read back by its id. That is bounded by the search's own bound — `k` and
-    /// `first` are 20 each — and it keeps one summary shape for all three queries rather than a second, thinner
-    /// one a client would have to tell apart. A hit that is gone by the time it is read is dropped rather than
-    /// returned half-filled.
-    private func searched(_ q: String, db: Database) async throws -> [MemorySummary] {
-        let hits = try await db.query(SearchMemoriesQuery(.init(q: q))).memoriesConnection.edges
-        var memories: [MemorySummary] = []
-        for hit in hits {
-            if let row = try await db.query(MemoryByIDQuery(.init(id: hit.node.id))).memory {
-                memories.append(Self.summary(row))
-            }
-        }
-        return memories
+    /// The search's projection carries each hit's whole summary — widened from the fields that merely rank it,
+    /// so a hit need not be read back by id. `project` is the engine's own filter, so the ranking walks far
+    /// enough into the project's hits to fill the bound.
+    private func searched(_ q: String, project: String?, db: Database) async throws -> [MemorySummary] {
+        let filter = project.map { ProjectWhere(slug: StringFilter(eq: $0)) }
+        return try await db.query(SearchMemoriesQuery(.init(q: q, project: filter))).memoriesConnection.edges
+            .map { Self.summary($0.node) }
     }
 
     /// `GET /migrated` — the imported, one-sided history, in the view of its own. Separate from `/proposals`
@@ -241,11 +233,18 @@ public struct MusaiEndpoint: Sendable {
     ///
     /// Every migrated row the import writes carries its `origin`, which is what a person traces it back by; the
     /// empty string is only for a row that somehow has none, so one old row cannot fail the whole view.
-    private func migrated(db: Database) async throws -> EndpointResponse {
+    ///
+    /// The answer is bounded — `first` is optional and capped — because the real corpus yields ~6 900 migrated
+    /// proposals, and it says whether it is showing all of them. That is known by **fetching one more than it
+    /// returns**: the query has no count, and the one extra row is the whole of `hasMore`.
+    private func migrated(_ request: EndpointRequest, db: Database) async throws -> EndpointResponse {
+        let first = Self.boundedFirst(request.query["first"])
+        let rows = try await db.query(MigratedDecisionsQuery(.init(first: first + 1))).decisions
         let reply = MigratedReply(
-            proposals: try await db.query(MigratedDecisionsQuery()).decisions.map {
+            proposals: rows.prefix(first).map {
                 MigratedProposal(id: $0.id, title: $0.title, act: $0.act, origin: $0.origin ?? "")
-            })
+            },
+            hasMore: rows.count > first)
         return try .json(reply)
     }
 
@@ -346,10 +345,10 @@ public struct MusaiEndpoint: Sendable {
             project: row.project?.slug)
     }
 
-    private static func summary(_ row: MemoryByIDQuery.Data.Memory_) -> MemorySummary {
+    private static func summary(_ hit: SearchMemoriesQuery.Data.MemoriesConnection.Edges.Node_) -> MemorySummary {
         summary(
-            id: row.id, text: row.text, kind: row.kind, origin: row.origin, provenance: row.provenance,
-            project: row.project?.slug)
+            id: hit.id, text: hit.text, kind: hit.kind, origin: hit.origin, provenance: hit.provenance,
+            project: hit.project?.slug)
     }
 
     private static func summary(
@@ -358,6 +357,19 @@ public struct MusaiEndpoint: Sendable {
     ) -> MemorySummary {
         MemorySummary(
             id: id, text: text, kind: kind, origin: origin, provenance: provenance, project: project)
+    }
+
+    /// What `musai review --migrated` shows without asking: a page a person reads at a glance.
+    private static let migratedFirst = 50
+    /// The most one request may ask for. The endpoint serves one request at a time, and there are ~6 900
+    /// migrated proposals, so the bound keeps a paging surface from walking the whole backlog in one read.
+    private static let migratedFirstCap = 500
+
+    /// `first` as the request gave it, within the bound. Absent, unreadable or non-positive is the default;
+    /// anything over the cap is the cap.
+    private static func boundedFirst(_ raw: String?) -> Int {
+        guard let raw, let asked = Int(raw) else { return migratedFirst }
+        return min(max(asked, 1), migratedFirstCap)
     }
 
     private func undrainedCount(_ db: Database) async throws -> Int {

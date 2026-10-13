@@ -203,7 +203,7 @@ import Testing
 
         let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
         let review = try await client.proposals()
-        let migration = try await client.migrated()
+        let migration = try await client.migrated().proposals
 
         // The live list carries the one awaiting a decision, and never the imported one.
         #expect(review.map(\.id) == [live])
@@ -214,6 +214,70 @@ import Testing
         #expect(migration.map(\.title) == ["Migrated one"])
         #expect(migration.first?.act == .decision)
         #expect(migration.first?.origin == "claude-mem:observation:2")
+    }
+
+    /// The migration view shows a page of a long import, not the whole of it: the real corpus yields ~6 900
+    /// migrated proposals, so a view of 50 with nothing saying so would look like the whole backlog. The
+    /// answer fetches one more than it returns — the query has no count — and says so as `hasMore`.
+    @Test func theMigrationViewSaysWhenThereIsMore() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        for n in 1...2 {
+            _ = try await backend.library.db.mutate(
+                RecordMigratedProposalUnboundMutation(
+                    .init(title: "Migrated \(n)", act: .decision, origin: "claude-mem:observation:\(n)")),
+                as: MusaiActors.migrator("claude-mem"))
+        }
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        // A bound shorter than the backlog returns exactly the bound and says there is more.
+        let page = try await client.migrated(first: 1)
+        #expect(page.proposals.count == 1)
+        #expect(page.hasMore)
+
+        // The default bound carries both, and says this is all of it.
+        let whole = try await client.migrated()
+        #expect(whole.proposals.count == 2)
+        #expect(whole.hasMore == false)
+    }
+
+    /// A search narrowed to a project honours both: `?project=&q=` returns only that project's hits, rather
+    /// than searching the whole store while the caller believes a filter applied.
+    @Test func aSearchHonoursTheProjectItIsGiven() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        _ = try await backend.library.db.mutate(
+            CreateProjectMutation(.init(name: "Musai", slug: "musai")), as: MusaiActors.user)
+        _ = try await backend.library.db.mutate(
+            CreateProjectMutation(.init(name: "Other", slug: "other")), as: MusaiActors.user)
+        for (slug, session) in [("musai", "host-m"), ("other", "host-o")] {
+            _ = try await backend.library.db.mutate(
+                UpsertSessionMutation(
+                    .init(memorySessionId: session, platform: "claude-code", startedAt: at, slug: slug)),
+                as: MusaiActors.user)
+        }
+        let mine = try await backend.library.db.mutate(
+            RecordMemoryForSessionMutation(
+                .init(
+                    kind: .fact, origin: .authored, text: "Norvo keeps one file", slug: "musai",
+                    memorySessionId: "host-m")),
+            as: MusaiActors.user).createMemory.id
+        _ = try await backend.library.db.mutate(
+            RecordMemoryForSessionMutation(
+                .init(
+                    kind: .fact, origin: .authored, text: "Norvo keeps one file too", slug: "other",
+                    memorySessionId: "host-o")),
+            as: MusaiActors.user)
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        // Both memories hold the word, so the whole-store search finds both...
+        #expect(try await client.memories(q: "Norvo").count == 2)
+        // ...and the project narrows that same search to its own hits.
+        let scoped = try await client.memories(project: "musai", q: "Norvo")
+        #expect(scoped.map(\.id) == [mine])
+        #expect(scoped.map(\.project) == ["musai"])
     }
 
     /// The import is the agent's work, requested over the endpoint — never a command that opens the store

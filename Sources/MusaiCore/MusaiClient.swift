@@ -98,12 +98,16 @@ public struct MusaiClient: Sendable {
     }
 
     /// The imported history awaiting confirmation: the migration view, which `musai review --migrated` reads and
-    /// which the live review list deliberately does not carry.
-    public func migrated() async throws -> [MigratedProposal] {
+    /// which the live review list deliberately does not carry. `first` bounds the answer; the reply also says
+    /// whether it is showing all of it, because there are ~6 900 of these and a view of a page with no signal
+    /// would read as the whole backlog.
+    public func migrated(first: Int? = nil) async throws -> MigratedReply {
         try await ensureCompatible()
-        let (data, response) = try await get(path: "migrated", query: [:])
+        var query: [String: String] = [:]
+        if let first { query["first"] = String(first) }
+        let (data, response) = try await get(path: "migrated", query: query)
         try ensureSuccess(response, data)
-        return try decode(MigratedReply.self, from: data).proposals
+        return try decode(MigratedReply.self, from: data)
     }
 
     /// One pass of the import over the corpus at `source` — claude-mem's database, read-only, which the agent
