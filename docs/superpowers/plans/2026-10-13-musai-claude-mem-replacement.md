@@ -318,13 +318,10 @@ Against a temp corpus made by the test:
     // assert one utterance, machinePrompts == 1 (the payload), skipped covers the two-character one
 }
 @Test func aSessionWithNoProjectIsStillImported() async throws {
-    // a corpus whose session has no cwd -> the Session exists unbound, its memories exist with no project, Memorie sWithoutProject finds them
+    // a corpus whose session has no cwd -> the Session exists unbound, its memories exist with no project, MemoriesWithoutProject finds them
 }
 @Test func anInterruptedImportResumesAtItsCursor() async throws {
     // run with batch: 1 against a 3-row corpus, then run again -> the second run imports exactly the remainder
-}
-@Test func droppingAMigratedProposalIsNotUndoneByARerun() async throws {
-    // (Task 6 covers the drop; this pins the cursor's reason for existing) import, drop one migrated proposal, import again -> it is not re-proposed
 }
 @Test func aDryRunReportsEverythingAndWritesNothing() async throws {
     // dryRun: true against a corpus -> the report's counts match a real run's, and every store row count is unchanged (no session, no memory, no project, no cursor)
@@ -379,6 +376,9 @@ git commit -m "feat: the import — sessions, evidence, prompts, work state, and
 }
 @Test func evidenceIsNotProposedAndAProposalIsNotEvidence() async throws {
     // a discovery-typed observation -> one Memory, no proposal; a decision-typed one -> a proposal, and a Memory too
+}
+@Test func droppingAMigratedProposalIsNotUndoneByARerun() async throws {
+    // (moved here from Task 5, which cannot write a proposal to drop) import, drop one migrated proposal, import again -> it is not re-proposed
 }
 ```
 
