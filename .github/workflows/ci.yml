@@ -19,6 +19,10 @@ jobs:
     # macos-15 is an arm64 image carrying Xcode 16.x, whose Swift is 6.1, the version
     # `// swift-tools-version: 6.1` requires.
     runs-on: macos-15
+    # A test that hangs must fail with a log inside half an hour, not sit in the job's six-hour
+    # default. One did: the first run of this workflow spent over an hour inside `swift test` and
+    # was still going when it was cancelled.
+    timeout-minutes: 30
     steps:
       - name: Check out Musai
         uses: actions/checkout@v4
