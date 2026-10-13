@@ -71,6 +71,7 @@ type Decision {
   document: Node
   documentRef: String
   utterance: Utterance
+  origin: String @index
 }
 
 type Memory @plural(name: "memories") {

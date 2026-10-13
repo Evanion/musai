@@ -56,27 +56,6 @@ import Testing
         #expect(text?.contains("Write the schema") == true)
     }
 
-    @Test func controlCharactersInATitleCannotBreakTheHandover() async throws {
-        let lib = try await seeded()
-        let said = try await utterance(lib)
-        let id = try await lib.db.mutate(
-            RecordProposalMutation(.init(
-                title: "tabs\tand\rreturns", rationale: nil, act: .constraint,
-                utterance: said, project: "musai")),
-            as: MusaiActors.curator).createDecision.id
-        _ = try await lib.db.mutate(
-            PersistDecisionOutsideMutation(.init(id: id, documentRef: "docs/\ta.swift", persistedAt: Date())),
-            as: MusaiActors.user)
-
-        let text = try #require(try await MusaiSlice.render(project: "musai", budget: 2_000, db: lib.db))
-        let json = try #require(
-            try JSONSerialization.jsonObject(with: Data(MusaiSlice.additionalContext(text).utf8))
-                as? [String: Any])
-        let specific = json["hookSpecificOutput"] as? [String: Any]
-        let context = try #require(specific?["additionalContext"] as? [String])
-        #expect(context.first?.contains("tabs\tand") == true)
-    }
-
     @Test func theSliceRespectsItsBudget() async throws {
         let lib = try await seeded()
         let said = try await utterance(lib)

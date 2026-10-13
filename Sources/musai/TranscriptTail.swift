@@ -1,4 +1,5 @@
 import Foundation
+import MusaiCore
 
 /// The one transcript read in the system: the agent's own last message, from the file the host's `Stop` hook
 /// hands over. Only `text` blocks are taken — never a tool call, never a tool's result — and only the tail of

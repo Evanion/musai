@@ -11,7 +11,7 @@ public enum ReviewAction: Sendable, Equatable {
     case skip
 }
 
-public struct Proposal: Sendable, Equatable {
+public struct Proposal: Sendable, Equatable, Codable {
     public let id: UUID
     public let title: String
     public let rationale: String?
@@ -21,7 +21,7 @@ public struct Proposal: Sendable, Equatable {
 }
 
 /// A decision that was settled and recorded nowhere. This set is the risk the loop exists to close.
-public struct Gap: Sendable, Equatable {
+public struct Gap: Sendable, Equatable, Codable {
     public let id: UUID
     public let title: String
     public let act: ActKind
@@ -60,54 +60,5 @@ public struct ReviewSession: Sendable {
         case .skip:
             break
         }
-    }
-
-    /// Prints the gap first, because that is the risk the person came to see, then walks the proposals and
-    /// reads one key per line. Returns how many it acted on.
-    @discardableResult
-    public func run(as actor: Actor) async throws -> Int {
-        let gap = try await unpersisted()
-        if !gap.isEmpty {
-            print("\(gap.count) decision\(gap.count == 1 ? "" : "s") were settled and never recorded anywhere:")
-            for entry in gap { print("  · \(entry.title)") }
-            print("")
-        }
-
-        let proposals = try await pending()
-        guard !proposals.isEmpty else {
-            if gap.isEmpty { print("nothing pending") }
-            return 0
-        }
-
-        var acted = 0
-        for (index, proposal) in proposals.enumerated() {
-            var headline = "[\(index + 1)/\(proposals.count)] \(proposal.title)   (\(proposal.act.displayName)"
-            if let said = proposal.said { headline += ", said: \"\(said)\"" }
-            print(headline + ")")
-            if let rationale = proposal.rationale { print("  \(rationale)") }
-            print("  [y] settled, landed nowhere   [r] settled, landed at…   [d] drop   [s] skip")
-
-            guard let answer = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
-                break
-            }
-            switch answer {
-            case "y":
-                try await apply(.settle, to: proposal.id, as: actor)
-                acted += 1
-            case "r":
-                guard let reference = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines),
-                    !reference.isEmpty
-                else { continue }
-                try await apply(.persist(documentRef: reference), to: proposal.id, as: actor)
-                acted += 1
-            case "d":
-                try await apply(.drop, to: proposal.id, as: actor)
-                acted += 1
-            default:
-                // An unrecognised key is a skip: a wrong confirmation is worse than a missed one.
-                continue
-            }
-        }
-        return acted
     }
 }

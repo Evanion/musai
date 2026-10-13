@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import MusaiCore
+import MusaiCore
+@testable import musai
 
 /// Answers every request with one decision about the first turn, so the Stop path's real drain runs offline.
 private struct OneDecisionTransport: ModelTransport {
@@ -11,6 +12,10 @@ private struct OneDecisionTransport: ModelTransport {
     }
 }
 
+/// The whole loop, through the host adapter and the client, over a real socket: a captured turn becomes a
+/// proposal, the person confirms it, and the next session is handed it. The drain is the endpoint's own —
+/// the capture only notes the queue, and the curator runs on a debounce window this test hands over — so
+/// nothing here reaches into the controller to force one.
 @Suite struct LoopEndToEndTests {
     private func payload(
         _ event: String, cwd: String, session: String, prompt: String? = nil, tool: String? = nil,
@@ -25,12 +30,27 @@ private struct OneDecisionTransport: ModelTransport {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
     }
 
+    /// Polls rather than sleeping a fixed time, so a concurrent result is picked up as soon as it exists.
+    private func eventually(_ condition: @Sendable () async throws -> Bool) async throws {
+        for _ in 0..<300 {
+            if try await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("condition did not hold in time")
+    }
+
     @Test func theLoopRunsFromATurnToTheNextSession() async throws {
-        let lib = try await MusaiLibrary.inMemory()
-        let runner = HookRunner(
-            capture: MusaiCapture(db: lib.db), library: lib,
-            provider: OpenAICompatibleProvider(
-                configuration: .default, transport: OneDecisionTransport()))
+        // The endpoint's curator runs the real drain, offline: the model is the one-decision transport. The
+        // debounce window is this test's to pass, so the drain is the endpoint's and not a race.
+        let detector = ModelDecisionDetector(
+            provider: OpenAICompatibleProvider(configuration: .default, transport: OneDecisionTransport()))
+        let windows = WindowGate()
+        let backend = try await BackendFixture.make(
+            detector: detector, sleep: { _ in await windows.nap() })
+        defer { backend.close() }
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+        let dispatch = HookDispatch(client: client)
+
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "musai-loop-\(UUID().uuidString)/Project")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -38,27 +58,27 @@ private struct OneDecisionTransport: ModelTransport {
         let cwd = root.path
 
         // 1. A first session start says nothing at all.
-        let first = await runner.run(
+        let first = await dispatch.run(
             event: nil, stdin: payload("SessionStart", cwd: cwd, session: "s1"), cwd: cwd)
         #expect(first.stdout == nil)
         #expect(first.diagnostic == nil)
 
         // 2. The person's turn is kept once, even though the hook fires twice.
         let turn = payload("UserPromptSubmit", cwd: cwd, session: "s1", prompt: "we will use one Norvo file")
-        _ = await runner.run(event: nil, stdin: turn, cwd: cwd)
-        _ = await runner.run(event: nil, stdin: turn, cwd: cwd)
-        let utterances = try await lib.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
+        _ = await dispatch.run(event: nil, stdin: turn, cwd: cwd)
+        _ = await dispatch.run(event: nil, stdin: turn, cwd: cwd)
+        let utterances = try await backend.library.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
         #expect(utterances.count == 1)
         #expect(utterances.first?.text == "we will use one Norvo file")
 
         // 3. A tool use keeps the reference and never the result.
-        _ = await runner.run(
+        _ = await dispatch.run(
             event: nil,
             stdin: payload(
                 "PostToolUse", cwd: cwd, session: "s1", tool: "Edit", target: "a.swift",
                 result: "WHOLE FILE CONTENTS"),
             cwd: cwd)
-        let events = try await lib.db.query(EventsForSessionQuery(.init(session: "s1"))).events
+        let events = try await backend.library.db.query(EventsForSessionQuery(.init(session: "s1"))).events
         let toolEvent = events.first { $0.kind == .toolUse }
         #expect(toolEvent?.tool == "Edit")
         #expect(toolEvent?.target == "a.swift")
@@ -71,31 +91,35 @@ private struct OneDecisionTransport: ModelTransport {
         try #"{"type":"assistant","message":{"content":[{"type":"text","text":"I changed a.swift"}]}}"#
             .write(to: transcript, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: transcript) }
-        _ = await runner.run(
+        _ = await dispatch.run(
             event: nil,
             stdin: payload("Stop", cwd: cwd, session: "s1", transcript: transcript.path),
             cwd: cwd)
-        let afterStop = try await lib.db.query(EventsForSessionQuery(.init(session: "s1"))).events
+        let afterStop = try await backend.library.db.query(EventsForSessionQuery(.init(session: "s1"))).events
         #expect(afterStop.first { $0.kind == .agentTurn }?.text == "I changed a.swift")
 
-        // 5. The Stop hook above already drained the queue through the detector, offline.
-        #expect(try await lib.db.query(UndrainedEventsQuery()).events.isEmpty)
+        // 5. A capture only notes the queue; the drain is the endpoint's own, off the request path, on the
+        //    debounce window handed over above. Let the window pass and wait for the endpoint to have drained
+        //    the queue — forcing the drain here would be the test pretending to be the request path.
+        try await eventually { await windows.opened == 1 }
+        await windows.openWindows()
+        try await eventually { try await backend.library.db.query(UndrainedEventsQuery()).events.isEmpty }
+        #expect(await backend.controller.drainCount == 1)  // one burst, one drain
 
         // 6. One keystroke, and it is recorded where it landed.
-        let review = ReviewSession(db: lib.db)
-        let pending = try await review.pending()
+        let pending = try await client.proposals()
         #expect(pending.map(\.title) == ["One Norvo file"])
         let decision = try #require(pending.first)
-        try await review.apply(.persist(documentRef: "commit:abc"), to: decision.id, as: MusaiActors.user)
+        try await client.apply(.persist(documentRef: "commit:abc"), to: decision.id)
 
         // 7. The next session starts with it.
-        let next = await runner.run(
+        let next = await dispatch.run(
             event: nil, stdin: payload("SessionStart", cwd: cwd, session: "s2"), cwd: cwd)
         #expect(next.stdout?.contains("One Norvo file") == true)
         #expect(next.stdout?.contains("commit:abc") == true)
         #expect(next.stdout?.contains("hookSpecificOutput") == true)
 
         // 8. And the gap is empty.
-        #expect(try await review.unpersisted().isEmpty)
+        #expect(try await client.gap().isEmpty)
     }
 }

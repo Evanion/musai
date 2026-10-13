@@ -9,7 +9,10 @@ import Testing
         for type in ["Utterance", "Event", "Decision"] {
             #expect(sdl.contains("type \(type)"))
         }
-        #expect(NorvoSchema.migrations.map(\.name) == ["0001_init", "0002_loop", "0003_decision_required"])
+        #expect(
+            NorvoSchema.migrations.map(\.name) == [
+                "0001_init", "0002_loop", "0003_decision_required", "0004_event_expiry",
+            ])
 
         _ = try await lib.db.mutate(
             CreateProjectMutation(.init(name: "Musai", slug: "musai")), as: MusaiActors.user)

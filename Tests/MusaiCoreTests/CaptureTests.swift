@@ -54,16 +54,13 @@ import Testing
 
     @Test func aHugeTurnIsCappedNotLost() async throws {
         let lib = try await library()
-        let runner = HookRunner(capture: MusaiCapture(db: lib.db), library: lib)
+        let capture = MusaiCapture(db: lib.db)
+        // The store caps the text; the hook's stdin bound moved to the endpoint, which refuses an oversized
+        // body from its headers rather than reading it. Neither ever drops the turn.
         let big = String(repeating: "z", count: 2_000_000)
-        let payload: [String: Any] = [
-            "hook_event_name": "UserPromptSubmit", "session_id": "s1", "cwd": "/tmp/musai-capture",
-            "user_prompt": big,
-        ]
-        let outcome = await runner.run(
-            event: nil, stdin: (try? JSONSerialization.data(withJSONObject: payload)) ?? Data(),
-            cwd: "/tmp/musai-capture")
-        #expect(outcome.diagnostic == nil)
+        _ = try await capture.captureUserTurn(
+            text: big, at: Date(timeIntervalSince1970: 1_700_000_000), origin: "claude", session: "s1",
+            cwd: "/tmp/musai-capture", as: MusaiActors.curator)
 
         let rows = try await lib.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
         #expect(rows.count == 1)
