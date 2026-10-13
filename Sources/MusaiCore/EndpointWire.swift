@@ -240,6 +240,53 @@ public struct MigratedProposal: Sendable, Equatable, Codable {
     }
 }
 
+/// The `GET /ideas` body: what discovery made of a corpus, or one project's ideas. The listing is bounded, and
+/// for the same reason `/migrated` is: it answers a glance, not an export.
+public struct IdeasReply: Sendable, Equatable, Codable {
+    public let ideas: [IdeaSummary]
+
+    public init(ideas: [IdeaSummary]) {
+        self.ideas = ideas
+    }
+}
+
+/// One idea as a client reads it — a thought that may become a project or a feature. `project` is where it
+/// came from and `spawnedProject` is what it became, both optional because the ideas the first run discovers
+/// are loose: labels that named no working tree.
+public struct IdeaSummary: Sendable, Equatable, Codable {
+    public let id: UUID
+    public let title: String
+    public let status: IdeaStatus
+    public let project: String?
+    public let spawnedProject: String?
+
+    public init(id: UUID, title: String, status: IdeaStatus, project: String?, spawnedProject: String?) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.project = project
+        self.spawnedProject = spawnedProject
+    }
+}
+
+/// The `POST /ideas/{id}/{drop|promote}` body: the idea as it stands after the act, and — when it was
+/// promoted — the project it became. `title` is carried so the verb can say *what* it acted on rather than
+/// print a bare id back at the person.
+public struct IdeaReply: Sendable, Equatable, Codable {
+    public let id: UUID
+    public let title: String
+    public let status: IdeaStatus
+    /// The project the idea became, present only on a promote.
+    public let spawnedProject: String?
+
+    public init(id: UUID, title: String, status: IdeaStatus, spawnedProject: String?) {
+        self.id = id
+        self.title = title
+        self.status = status
+        self.spawnedProject = spawnedProject
+    }
+}
+
 /// The `POST /admin/import` body's answer: what the one pass the request asked for did. The report is the
 /// import's own type, so a client and the driver cannot disagree about what a number means.
 public struct ImportReportReply: Sendable, Equatable, Codable {

@@ -110,6 +110,35 @@ public struct MusaiClient: Sendable {
         return try decode(MigratedReply.self, from: data)
     }
 
+    /// The ideas the store holds — what the first run discovered — or, with a project, just that project's.
+    /// `project` is optional because discovery's ideas are loose: labels that named no working tree, which is
+    /// exactly what this surface exists to let a person see.
+    public func ideas(project: String? = nil) async throws -> [IdeaSummary] {
+        try await ensureCompatible()
+        var query: [String: String] = [:]
+        if let project { query["project"] = project }
+        let (data, response) = try await get(path: "ideas", query: query)
+        try ensureSuccess(response, data)
+        return try decode(IdeasReply.self, from: data).ideas
+    }
+
+    /// Drops one idea. It is deleted rather than parked: nothing references an idea, so there is no history
+    /// to keep. The reply carries the idea's title, so the verb can say what it acted on.
+    public func drop(idea id: UUID) async throws -> IdeaReply {
+        try await ensureCompatible()
+        let (data, response) = try await post(path: "ideas/\(id.uuidString)/drop", body: Data())
+        try ensureSuccess(response, data)
+        return try decode(IdeaReply.self, from: data)
+    }
+
+    /// Turns one idea into a project — the data model's own arc — and answers with the project it became.
+    public func promote(idea id: UUID) async throws -> IdeaReply {
+        try await ensureCompatible()
+        let (data, response) = try await post(path: "ideas/\(id.uuidString)/promote", body: Data())
+        try ensureSuccess(response, data)
+        return try decode(IdeaReply.self, from: data)
+    }
+
     /// One pass of the import over the corpus at `source` — claude-mem's database, read-only, which the agent
     /// opens on the backend's side and this client never touches.
     ///

@@ -44,6 +44,8 @@ struct MusaiHook {
             await Import(arguments: arguments).run()
         case "recall":
             await Recall(arguments: arguments).run()
+        case "ideas":
+            await Ideas(arguments: arguments).run()
         case "doctor":
             await doctor(arguments: arguments)
         case "mcp":
@@ -557,6 +559,78 @@ struct Recall {
         } catch {
             diagnose(oneLine(error))
         }
+    }
+}
+
+/// `musai ideas`: what the first run discovered, listed — and, with a key, corrected.
+///
+/// An idea is what the import makes of a corpus label that named no working tree: a thread that lived only in
+/// conversation. Until this verb there was no way to see the ideas in the store or to act on one, even though
+/// the dry-run report named them and the README told a person to run the import that creates them. Listing is
+/// the read; `--drop` deletes one and `--promote` turns one into the project it was pointing at, the arc the
+/// data model already has. A rename and a merge are deliberately absent: an idea's title comes from the
+/// corpus, and a merge is a decision with a target rather than a verb on one row. This is a client of the
+/// backend and never opens the store.
+struct Ideas {
+    var arguments: [String]
+    var connect: () async -> MusaiClient? = MusaiHook.connectedClient
+    var write: (String) -> Void = { print($0) }
+    var diagnose: (String) -> Void = { FileHandle.standardError.write(Data("musai: \($0)\n".utf8)) }
+
+    /// `--project <slug>`: list one project's ideas rather than every idea the store holds.
+    var project: String? { MusaiHook.option("--project", in: arguments) }
+    /// `--drop <id>`: delete one idea. Nothing references an idea, so the row goes without a trace.
+    var drop: UUID? { MusaiHook.option("--drop", in: arguments).flatMap(UUID.init(uuidString:)) }
+    /// `--promote <id>`: turn one idea into a project — the data model's own arc.
+    var promote: UUID? { MusaiHook.option("--promote", in: arguments).flatMap(UUID.init(uuidString:)) }
+
+    func run() async {
+        guard let client = await connect() else {
+            diagnose(MusaiHook.noBackend)
+            return
+        }
+        do {
+            if arguments.contains("--drop") {
+                guard let id = drop else {
+                    diagnose("`--drop` needs the id of an idea: `musai ideas --drop <id>`")
+                    return
+                }
+                let reply = try await client.drop(idea: id)
+                write("musai: dropped \"\(reply.title)\"")
+            } else if arguments.contains("--promote") {
+                guard let id = promote else {
+                    diagnose("`--promote` needs the id of an idea: `musai ideas --promote <id>`")
+                    return
+                }
+                let reply = try await client.promote(idea: id)
+                write("musai: \"\(reply.title)\" is now project \"\(reply.spawnedProject ?? "")\"")
+            } else {
+                try await list(client)
+            }
+        } catch {
+            diagnose(oneLine(error))
+        }
+    }
+
+    /// The listing: one idea to a line, its id included because that is what the two keys act on, and where
+    /// it sits — the project it came from, the project it became, or neither.
+    private func list(_ client: MusaiClient) async throws {
+        let ideas = try await client.ideas(project: project)
+        guard !ideas.isEmpty else {
+            write("no ideas")
+            return
+        }
+        write("\(ideas.count) idea\(ideas.count == 1 ? "" : "s"):")
+        for idea in ideas {
+            write("  · \(idea.title)   (\(place(idea)))   [\(idea.id.uuidString)]")
+        }
+    }
+
+    /// Where one idea sits.
+    private func place(_ idea: IdeaSummary) -> String {
+        if let spawned = idea.spawnedProject { return "spawned: \(spawned)" }
+        if let project = idea.project { return project }
+        return "no project"
     }
 }
 

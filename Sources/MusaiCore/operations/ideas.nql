@@ -8,10 +8,19 @@ fragment IdeaBits on Idea {
   spawnedProject { slug }
 }
 
-query AllIdeas { ideas(orderBy: [{createdAt: ASC}]) { ...IdeaBits } }
+# `$first` bounds the read as well as the rows. It is deliberately left without a default: discovery reads
+# every idea's title to tell what the corpus has already named, and a default bound would silently stop
+# seeing past it and file a duplicate. A caller that leaves it out reads every idea, as discovery must.
+query AllIdeas($first: Int) {
+  ideas(orderBy: [{createdAt: ASC}], first: $first) { ...IdeaBits }
+}
 
-query IdeasForProject($slug: String!) {
-  ideas(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: ASC}]) { ...IdeaBits }
+query IdeasForProject($slug: String!, $first: Int) {
+  ideas(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: ASC}], first: $first) { ...IdeaBits }
+}
+
+query IdeaByID($id: ID!) {
+  idea(by: {id: $id}) { ...IdeaBits }
 }
 
 mutation CreateIdea($title: String!, $body: String, $slug: String!) {
@@ -28,4 +37,11 @@ mutation CreateLooseIdea($title: String!) {
 
 mutation PromoteIdea($id: ID!, $project: ID!) {
   updateIdea(by: {id: $id}, set: {status: {set: PROMOTED}, spawnedProject: {connect: {id: $project}}}) { id status }
+}
+
+# An idea dropped in the corrective surface is deleted, not parked: a `DROPPED` status would need someone to
+# read it and would leave the row in `AllIdeas`, and nothing references an idea, so there is no history a
+# delete could strand.
+mutation DropIdea($id: ID!) {
+  deleteIdea(by: {id: $id})
 }

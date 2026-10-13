@@ -63,7 +63,8 @@ If you were using claude-mem before this, its corpus is most of what you remembe
 4. **Work as usual.** The hooks file what happens while it happens.
 5. **`musai doctor`** when something looks wrong, **`musai recall <words>`** to find what you half
    remember, and **`musai review`** — with **`--migrated`** for the imported backlog — to give your word
-   on what the curator and the import filed.
+   on what the curator and the import filed. **`musai ideas`** lists the ideas the corpus named, and
+   `--promote <id>` turns one into a project or `--drop <id>` removes it.
 
 ```sh
 musai import --dry-run                 # discover; writes nothing at all, not even a cursor
@@ -71,6 +72,8 @@ musai import                           # write it; Ctrl-C any time, and run it a
 musai recall norvo keeps one file      # the text of every memory holding those words
 musai recall --project musai one file  # …narrowed to one project
 musai review --migrated                # the imported, one-sided history, a page at a time
+musai ideas                            # the ideas discovery made, one a line
+musai ideas --promote <id>             # …or --drop <id> to correct what was kept
 ```
 
 `--from <path>` names a corpus somewhere else; the default is `~/.claude-mem/claude-mem.db`. Three things
