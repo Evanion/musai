@@ -21,6 +21,7 @@
 - The person's words are stored verbatim; agent words and tool output are references, never output.
 - `Sources/MusaiCore/schema.nql` must equal the **last** file in `Sources/MusaiCore/migrations/`; `norvo check` fails the build otherwise. A schema change is a new numbered migration snapshot plus the same edit to `schema.nql`.
 - Every `swift` command needs `MUSAI_NORVO_PATH=/Volumes/projects/Personal/norvo-swift NORVO_LOCAL=1`. **`norvo` is not on `PATH`**: invoke the engine's local build directly, `/Volumes/projects/Personal/norvo-swift/Artifacts/norvo.artifactbundle/norvo-macos/bin/norvo check Sources/MusaiCore`, and note it needs no `NORVO_LOCAL`.
+- A task's **Files** list is the minimum, not a cap. If a task genuinely needs something it does not name — an operation a project-less write requires, a migration, or a second test file the suite needs updated — add it, commit it, and say so in the report. Two of the first four tasks had to (Task 1 a second migration-list assertion, Task 4 a project-less idea write), and in both cases following the brief's `git add` literally would have committed a red suite or a non-compiling branch.
 - **A revert does not revert the generated code.** `NorvoCodegen` writes `Norvo.generated.swift` under `.build/plugins/outputs/…`, and it survives a `git checkout` or a removed file — so after an aborted attempt or a revert, `rm -rf .build` (or delete that file) before trusting a red-first run, or the run can come up green from symbols that no longer exist in the sources.
 
 ## Review Focus
