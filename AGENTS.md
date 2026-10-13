@@ -35,6 +35,11 @@ package).
   ledger, which is git-ignored scratch. File them with `gh issue create`, grouped into fixable
   units — one per file or surface — rather than one per minor, and let genuinely cosmetic items
   stay in the ledger.
+- **A finished slice's decisions are persisted, not left in scratch.** When a slice lands, its
+  executor's ledger — every ruling with its cost, and every deferred finding — is committed to
+  `docs/superpowers/rulings/YYYY-MM-DD-<slice>-rulings.md`. Live findings stay in the issue tracker;
+  the rulings file is the decisions and the tracker is the work, and neither replaces the other,
+  because the working ledger is deleted with the workspace.
 - **A review is budgeted, and the whole-branch review is not a re-read.** Per-task reviews read
   their own diff; the final whole-branch review gets the task verdicts, a short change summary
   and the cross-cutting questions — not the entire branch diff, the full spec, the plan and the
