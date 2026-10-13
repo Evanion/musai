@@ -25,12 +25,13 @@ git worktree, point at it explicitly:
 
 ```sh
 export MUSAI_NORVO_PATH=/Volumes/projects/Personal/norvo-swift
-export NORVO_LOCAL=1        # use the engine built at NorvoDB/target/apple instead of downloading binaries
 ```
 
-`NORVO_LOCAL=1` is read by `norvo-swift`'s own manifest and makes it link its `Artifacts/`
-symlinks to a local engine build. Without it, the first build downloads the pinned
-`binaries-v0.0.1` release.
+The first build downloads the pinned `binaries-v0.0.2` release of the engine, and that release is
+what Musai is on. `NORVO_LOCAL=1` makes `norvo-swift` link the engine built in its own `Artifacts/`
+instead — what you want when you are working on Norvo itself, and only then: `norvo codegen` runs
+against whichever engine the manifest resolved, so a stale local build fails the build rather than
+letting it pass.
 
 ```sh
 swift build
@@ -48,6 +49,40 @@ musai install
 `musai install` assembles `~/Applications/Musai.app` with the agent nested inside it, registers the launch
 agent, and merges the hooks into `~/.claude/settings.json` with a backup. `docs/claude-code-hooks.md` has
 each hook, its timeout, the model configuration, and how to uninstall.
+
+## First run
+
+If you were using claude-mem before this, its corpus is most of what you remember of these projects, and
+`musai import` reads it in. This is the whole of the first run:
+
+1. **`musai install`** — once, as above. It is what starts the backend that owns the store.
+2. **`musai import --dry-run`** — see what would be discovered before anything is kept: the counts, the
+   projects and ideas the corpus names, and the labels that turn out to be a filing habit rather than work.
+3. **`musai import`** — the same, written: your sessions, claude-mem's own distilled observations and
+   summaries as memories, your prompts, and the one-sided entries as proposals awaiting your word.
+4. **Work as usual.** The hooks file what happens while it happens.
+5. **`musai doctor`** when something looks wrong, **`musai recall <words>`** to find what you half
+   remember, and **`musai review`** — with **`--migrated`** for the imported backlog — to give your word
+   on what the curator and the import filed.
+
+```sh
+musai import --dry-run                 # discover; writes nothing at all, not even a cursor
+musai import                           # write it; Ctrl-C any time, and run it again to resume
+musai recall norvo keeps one file      # the text of every memory holding those words
+musai recall --project musai one file  # …narrowed to one project
+musai review --migrated                # the imported, one-sided history, a page at a time
+```
+
+`--from <path>` names a corpus somewhere else; the default is `~/.claude-mem/claude-mem.db`. Three things
+make step 3 safe to take:
+
+- **It reads claude-mem, and never writes it.** The corpus is opened read-only, and `--dry-run` is the same
+  route with the writes turned off — so what it reports is what the real run does.
+- **It can be run again.** A row is keyed on where it came from, its provenance, so a second run lands on
+  what the first wrote rather than beside it.
+- **It can be stopped.** Each stage keeps a cursor after the last batch it committed, and `musai import`
+  takes one batch of each stage per request; a run you interrupt comes back where it stopped, and a live
+  session's capture is never stuck behind your whole corpus.
 
 ## Try the loop by hand
 
