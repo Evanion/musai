@@ -64,4 +64,31 @@ import MusaiCore
             Data(#"{"session_id":"s1","cwd":"/tmp/musai-host","hook_event_name":"SomethingNew"}"#.utf8))
         #expect(try HostAdapter.events(for: payload, at: at).isEmpty)
     }
+
+    /// The host's stdout shape is the adapter's, so the test that a control character in the slice cannot
+    /// break it lives here with the shape rather than with `MusaiCore`.
+    @Test func controlCharactersInATitleCannotBreakTheHandover() async throws {
+        let library = try await MusaiLibrary.inMemory()
+        _ = try await library.db.mutate(
+            CreateProjectMutation(.init(name: "Musai", slug: "musai")), as: MusaiActors.user)
+        let said = try await MusaiCapture(db: library.db).captureUserTurn(
+            text: "we will use one Norvo file", at: at, origin: "claude", session: "s1",
+            cwd: "/tmp/musai-host", as: MusaiActors.curator)
+        let id = try await library.db.mutate(
+            RecordProposalMutation(.init(
+                title: "tabs\tand\rreturns", rationale: nil, act: .constraint,
+                utterance: said, project: "musai")),
+            as: MusaiActors.curator).createDecision.id
+        _ = try await library.db.mutate(
+            PersistDecisionOutsideMutation(.init(id: id, documentRef: "docs/\ta.swift", persistedAt: Date())),
+            as: MusaiActors.user)
+
+        let text = try #require(try await MusaiSlice.render(project: "musai", budget: 2_000, db: library.db))
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: Data(HostAdapter.additionalContext(text).utf8))
+                as? [String: Any])
+        let specific = json["hookSpecificOutput"] as? [String: Any]
+        let context = try #require(specific?["additionalContext"] as? [String])
+        #expect(context.first?.contains("tabs\tand") == true)
+    }
 }

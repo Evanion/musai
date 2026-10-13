@@ -46,6 +46,25 @@ enum HostAdapter {
         let material = tool + "\u{1F}" + (target ?? "")
         return SHA256.hash(data: Data(material.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+
+    /// The host's own stdout shape for the session-start hook. It lives with the adapter rather than in
+    /// `MusaiCore`, because a new host needs a different shape and the core knows no host at all.
+    static func additionalContext(_ text: String) -> String {
+        var escaped = ""
+        for scalar in text.unicodeScalars {
+            switch scalar {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "\n": escaped += "\\n"
+            case "\r": escaped += "\\r"
+            case "\t": escaped += "\\t"
+            case let control where control.value < 0x20:
+                escaped += String(format: "\\u%04x", control.value)
+            default: escaped.unicodeScalars.append(scalar)
+            }
+        }
+        return #"{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":["\#(escaped)"]}}"#
+    }
 }
 
 /// What one hook invocation hands back: stdout for the host, or a one-line diagnostic for the log. It never
@@ -68,7 +87,7 @@ struct HookDispatch: Sendable {
             // `SessionStart` hands the agent the slice; a store with nothing to say stays quiet.
             if (event ?? payload.event) == "SessionStart" {
                 guard let text = try await client.context(cwd: payload.cwd ?? cwd) else { return .silent }
-                return HookOutcome(stdout: MusaiSlice.additionalContext(text), diagnostic: nil)
+                return HookOutcome(stdout: HostAdapter.additionalContext(text), diagnostic: nil)
             }
             for normalized in try HostAdapter.events(for: payload, at: at, event: event) {
                 _ = try await client.capture(normalized)
