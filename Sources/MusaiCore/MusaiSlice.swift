@@ -4,6 +4,10 @@ import NorvoLite
 /// The bounded slice of what Musai knows, handed to an agent when a task starts.
 public enum MusaiSlice {
     public static let defaultBudget = 2_000
+    /// How many of a project's memories the slice reads before ordering them. The slice's *output* is
+    /// budgeted below; this bounds the *read*, which every `SessionStart` pays for and which would otherwise
+    /// grow with the project. See the trade this window buys at the call site in `render`.
+    static let sliceMemoryWindow = 200
     /// Held back so the "there is more" line always fits inside the budget.
     private static let reserve = 40
 
@@ -20,7 +24,15 @@ public enum MusaiSlice {
             }
             lines.append(line)
         }
-        let memories = try await db.query(MemoriesForProjectQuery(.init(slug: project))).memories
+        // A named window, not the whole project's history: the engine cannot order by a relation's field, so
+        // the query's only order is `createdAt` — *write* time — and this reads the newest `sliceMemoryWindow`
+        // rows by it. For live-captured (ambient) memory that is close to session time. For a fully imported
+        // project every row was written at the import, so the window *samples* the corpus rather than ordering
+        // it, and the sort below orders only within that sample. That is the deliberate price of not reading
+        // every memory of a project on every `SessionStart`; a relation-field `orderBy` upstream would let the
+        // window be by session time instead and remove the trade.
+        let memories = try await db.query(
+            MemoriesForProjectQuery(.init(slug: project, first: Self.sliceMemoryWindow))).memories
         for memory in newestFirst(memories) {
             guard let said = prose(of: memory) else { continue }
             lines.append("- \(said) (remembered)")

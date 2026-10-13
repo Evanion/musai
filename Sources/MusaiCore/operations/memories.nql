@@ -12,8 +12,10 @@ fragment MemoryBits on Memory {
   subject { id }
 }
 
-query MemoriesForProject($slug: String!) {
-  memories(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: DESC}]) { ...MemoryBits }
+# `$first` bounds the read as well as the rows: a caller that leaves it out reads the whole project, which
+# is what the slice must not do on `SessionStart`. The slice names its own window; see `MusaiSlice.render`.
+query MemoriesForProject($slug: String!, $first: Int) {
+  memories(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: DESC}], first: $first) { ...MemoryBits }
 }
 
 query MemoriesOfKind($kind: MemoryKind!) {

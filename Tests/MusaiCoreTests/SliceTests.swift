@@ -132,6 +132,9 @@ import Testing
         let rendered = try #require(text)
         #expect(rendered.contains("The flaky import was SQLite's epoch handling"))
         #expect(rendered.contains("The store began as one Norvo file"))
+        // The marker is the only thing telling a remembered fact from a settled decision in the same bullet
+        // list; dropping it renders identically but hands the agent a different thing.
+        #expect(rendered.contains("(remembered)"))
         #expect(rendered.utf8.count <= 2_000)
         let newer = try #require(rendered.range(of: "The flaky import was SQLite's epoch handling"))
         let older = try #require(rendered.range(of: "The store began as one Norvo file"))
@@ -153,6 +156,29 @@ import Testing
         let rendered = try #require(text)
         #expect(rendered.utf8.count <= 1_200)
         #expect(rendered.hasSuffix("more)"))
+    }
+
+    /// The read is bounded, not the whole project: with more memories than the window holds, the slice can
+    /// only ever consider `sliceMemoryWindow` of them. The proof needs no knowledge of *which* rows the query's
+    /// `createdAt` order keeps — only that everything the render shows or counts came out of that one window,
+    /// so shown + omitted cannot exceed it however many memories the project holds.
+    @Test func theSliceReadsOnlyItsMemoryWindow() async throws {
+        let lib = try await seeded()
+        try await session(lib, "s-corpus", startedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        for index in 0..<250 {
+            try await memory(
+                lib, String(repeating: "long memory \(index) ", count: 8),
+                provenance: "claude-mem:observation:\(index)", session: "s-corpus")
+        }
+
+        let text = try await MusaiSlice.render(project: "musai", budget: 1_200, db: lib.db)
+        let rendered = try #require(text)
+        let bulleted = rendered.split(separator: "\n").filter { $0.hasPrefix("- ") }.count
+        let omitted = try #require(
+            rendered.split(separator: "\n").last.flatMap { line in
+                line.hasPrefix("(+") && line.hasSuffix(" more)") ? Int(line.dropFirst(2).dropLast(6)) : nil
+            })
+        #expect(bulleted + omitted == MusaiSlice.sliceMemoryWindow)
     }
 
     /// Not a red-then-green test: this is the guard that a project with nothing remembered renders the
