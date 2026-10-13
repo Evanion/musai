@@ -76,6 +76,26 @@ public struct ClaudeMemReader: Sendable {
         }
     }
 
+    /// Session summaries, oldest id first, after a high-water mark. Only the `next_steps` a proposal is made
+    /// of comes back; the rest of a summary's prose is its own evidence, and the reader is not the place that
+    /// decides which field is which. Every row the corpus holds is returned, including the many with no
+    /// `next_steps`, for the caller to skip and count.
+    public func summaries(limit: Int, after: Int) throws -> [SourceSummary] {
+        try run("""
+        SELECT ss.id, ss.next_steps, COALESCE(s.content_session_id, ss.memory_session_id)
+        FROM session_summaries ss
+        LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
+        WHERE ss.id > ?1
+        ORDER BY ss.id ASC
+        LIMIT ?2
+        """, limit: limit, after: after) { row in
+            SourceSummary(
+                id: row.int(0),
+                hostSessionId: row.requiredText(2),
+                nextSteps: row.text(1))
+        }
+    }
+
     /// The person's prompts, oldest id first, after a high-water mark.
     public func prompts(limit: Int, after: Int) throws -> [SourcePrompt] {
         try run("""

@@ -3,33 +3,41 @@ import NorvoLite
 
 /// The import: the first run's driver. It reads an existing claude-mem corpus — **read-only**, through
 /// `ClaudeMemReader` — and writes the person's history into the graph: sessions keyed on the host's session
-/// id, claude-mem's own distilled observations as migrated `Memory`, the conversation as `Utterance`s, and the
-/// work state, latest-only. It writes nothing back to the corpus.
+/// id, claude-mem's own distilled observations as migrated `Memory`, the conversation as `Utterance`s, the
+/// work state, latest-only, and the one-sided entries — its `decision`-typed observations and the
+/// `next_steps` a summary recorded — as `MIGRATED` proposals the person confirms. It writes nothing back to
+/// the corpus.
 ///
 /// Three properties it has to hold, and how:
 ///
 /// - **Idempotent.** `Session.memorySessionId` carries the *host's* session id — the one live capture already
 ///   upserts on — so a conversation claude-mem and Musai both saw lands on one row. A memory is keyed by its
-///   `provenance` and an utterance by its `origin`, so a row that is written twice lands once.
+///   `provenance`, an utterance and a proposal by their `origin`, so a row that is written twice lands once.
 /// - **Resumable.** Each stage keeps an `ImportCursor`: a stored high-water mark of the last source row id it
 ///   has passed, moved *after* the batch it names has been written. A run that fails, or is killed between two
 ///   batches, resumes at the last committed boundary rather than at the beginning — and a row that was read
 ///   and deliberately dropped (an apparatus prompt) is behind the cursor too, so a re-run does not resurrect it.
 /// - **Bounded.** A run is one batch per stage, not the whole corpus: it shares the one writer with capture
 ///   and the curator, so it holds it for a batch at a time, and a caller repeats `run()` until a report comes
-///   back empty. The one exception is the sessions stage, which is read to its end before the others start:
-///   every later stage writes *through* a session row, and a half-read sessions stage would strand evidence
-///   behind a cursor that had already passed it.
+///   back empty. (The proposals stage reads one batch from each of its two sources, which are two tables.) The
+///   one exception is the sessions stage, which is read to its end before the others start: every later stage
+///   writes *through* a session row, and a half-read sessions stage would strand evidence behind a cursor that
+///   had already passed it.
 ///
 /// Every write goes through `commit`, which a dry run turns off and nothing else — the dry run is the same
 /// code with the mutations skipped, rather than a second path that could disagree with the real one.
 public struct MusaiImport: Sendable {
     /// The `ImportCursor.source` names, one per stage this driver owns. A stage's name is its identity —
-    /// `ImportCursor.source` is unique — so they must stay distinct; Task 6's proposals stage takes a fourth.
+    /// `ImportCursor.source` is unique — so they must stay distinct. The proposals stage keeps **two**: it
+    /// reads two tables, each with an id space of its own, and one watermark cannot be a boundary for both.
     public enum Cursor: String, Sendable {
         case sessions = "claude-mem:sessions"
         case evidence = "claude-mem:observations"
         case prompts = "claude-mem:prompts"
+        /// The `decision`-typed observations, as one-sided entries.
+        case proposals = "claude-mem:proposals"
+        /// The `next_steps` of summaries, the corpus's other one-sided entries.
+        case summaryProposals = "claude-mem:summary_proposals"
     }
 
     /// What the import does with one prompt. The rule is a judgement rather than a column, so it lives in one
@@ -63,6 +71,9 @@ public struct MusaiImport: Sendable {
     static func promptOrigin(_ id: Int) -> String { "claude-mem:prompt:\(id)" }
     /// A work-state row's source row as a `WorkState.origin`, the same shape.
     static func workStateOrigin(_ id: Int) -> String { "claude-mem:work_state:\(id)" }
+    /// A summary's source row as a proposal's `origin` — the identity a re-run dedupes on, and the thing a
+    /// `drop` leaves no trace of, which is why the stage's cursor is what stops a dropped proposal returning.
+    static func summaryOrigin(_ id: Int) -> String { "claude-mem:summary:\(id)" }
 
     private let db: Database
     private let reader: ClaudeMemReader
@@ -81,9 +92,10 @@ public struct MusaiImport: Sendable {
 
     /// Runs the import — or, with `dryRun`, everything it would do except the writes.
     ///
-    /// The stages are ordered by dependency: a session before the evidence and prompts that connect through it,
-    /// evidence before prompts, work state last. Each stage commits a batch at a time and only then moves its
-    /// cursor past it.
+    /// The stages are ordered by dependency: a session before the evidence, prompts and proposals that connect
+    /// through it; evidence before prompts, so the graph holds what was said before what was asked of it;
+    /// proposals after both, because a one-sided entry is read from the same table the evidence stage writes;
+    /// work state last. Each stage commits a batch at a time and only then moves its cursor past it.
     public func run(dryRun: Bool = false) async throws -> ImportReport {
         var tally = Tally()
         // Where each session this run read belongs, by host session id. A dry run needs it as much as a real
@@ -92,6 +104,7 @@ public struct MusaiImport: Sendable {
 
         try await importSessions(dryRun: dryRun, tally: &tally, bindings: &bindings)
         try await importEvidence(dryRun: dryRun, tally: &tally, bindings: &bindings)
+        try await importProposals(dryRun: dryRun, tally: &tally, bindings: &bindings)
         try await importPrompts(dryRun: dryRun, tally: &tally, bindings: &bindings)
         // The slugs discovery named — the projects a dry run has not written, and that a work state may live on.
         let projects = tally.projects
@@ -210,6 +223,155 @@ public struct MusaiImport: Sendable {
             tally.evidence += 1
         }
         if let last = rows.last { try await move(.evidence, to: last.id, dryRun: dryRun) }
+    }
+
+    // MARK: - The one-sided entries
+
+    /// One source row, as the proposal it becomes. What a person confirms is the corpus's own headline, the
+    /// reason it gave, and the act its type names.
+    struct Candidate: Equatable {
+        let origin: String
+        let title: String
+        let rationale: String?
+        let act: ActKind
+    }
+
+    /// The `type:<raw>` concept the reader keeps in front of an observation's concepts, whose whole purpose is
+    /// that a judgement made downstream of its type table stays recoverable.
+    static let typeConceptPrefix = "type:"
+
+    /// claude-mem's own word for a row, as the act the person is being asked about. Only a `decision`-typed row
+    /// is proposed (below), so `decision` is the one entry the measured corpus reaches; the table is where a
+    /// corpus that starts naming an act in its type lands instead of on the default, and an unconfirmed
+    /// one-sided entry is closest to `.decision`.
+    static let actsByType: [String: ActKind] = [
+        "decision": .decision,
+        "question": .question,
+        "constraint": .constraint,
+        "proposal": .proposal,
+        "objection": .objection,
+    ]
+
+    static func act(forType type: String) -> ActKind { actsByType[type] ?? .decision }
+
+    /// The raw type back out of an observation's concepts, or `nil` when the reader put none there.
+    static func rawType(ofConcepts concepts: [String]) -> String? {
+        concepts.first { $0.hasPrefix(typeConceptPrefix) }
+            .map { String($0.dropFirst(typeConceptPrefix.count)) }
+    }
+
+    /// A block of prose as a proposal reads it: its first line that is not blank is the headline, and the rest
+    /// is the reason when the corpus gave none of its own.
+    static func splitProse(_ text: String) -> (headline: String?, beyond: String?) {
+        var headline: String?
+        var rest: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if headline == nil {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty { headline = trimmed }
+                continue
+            }
+            rest.append(String(line))
+        }
+        let beyond = rest.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (headline, beyond.isEmpty ? nil : beyond)
+    }
+
+    /// One observation as a one-sided entry, or `nil` when it is not one — the selection rule, in one place and
+    /// a rule rather than a model call: the corpus wrote `decision` for a choice it recorded one side of, and
+    /// the other 19 types it was measured to write are evidence only. The headline is the first line of the
+    /// composed prose, which is the row's own `title` column wherever the corpus wrote one (2 035 of the 2 036
+    /// decision rows measured); the reason is the corpus's narrative when it has one (1 998 of them), and the
+    /// prose under the headline when it does not.
+    static func proposal(from row: SourceEvidence) -> Candidate? {
+        guard row.kind == .decision else { return nil }
+        let prose = splitProse(row.text)
+        guard let headline = prose.headline else { return nil }
+        return Candidate(
+            origin: row.provenance,
+            title: headline,
+            rationale: cleaned(row.narrative) ?? prose.beyond,
+            act: act(forType: rawType(ofConcepts: row.concepts) ?? ""))
+    }
+
+    /// One summary as a one-sided entry: what it left to do. A summary with no `next_steps` recorded no
+    /// choice, so it is not one. Its act is the default — a summary is not one of the corpus's act-naming types.
+    static func proposal(from row: SourceSummary) -> Candidate? {
+        guard let steps = cleaned(row.nextSteps) else { return nil }
+        let prose = splitProse(steps)
+        guard let headline = prose.headline else { return nil }
+        return Candidate(
+            origin: summaryOrigin(row.id), title: headline, rationale: prose.beyond, act: .decision)
+    }
+
+    private static func cleaned(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - Proposals
+
+    /// One batch of the corpus's one-sided entries, filed as `MIGRATED` proposals: nothing here enters the live
+    /// review list, and `settle`/`persist`/`drop` act on these exactly as on a live one — which is why filing
+    /// them never asks a model. Two sources, each with its own watermark.
+    ///
+    /// What this stage adds to `skipped` is narrow, deliberately: an **observation** it declines is not
+    /// counted, because the evidence stage read the same row and already counted it — once for prose that
+    /// composed to nothing, once for a memory already in the store — and one row counted twice would make
+    /// `skipped` say something untrue. A **summary** it declines is counted, whatever it declined for: no
+    /// other stage reads that table, so nothing else accounts for it.
+    private func importProposals(
+        dryRun: Bool, tally: inout Tally, bindings: inout [String: Binding?]
+    ) async throws {
+        let observations = try reader.evidence(limit: batch, after: try await highWater(.proposals))
+        for row in observations {
+            guard let entry = Self.proposal(from: row) else { continue }
+            _ = try await file(
+                entry, underSession: row.hostSessionId, dryRun: dryRun, tally: &tally, bindings: &bindings)
+        }
+        if let last = observations.last { try await move(.proposals, to: last.id, dryRun: dryRun) }
+
+        let summaries = try reader.summaries(limit: batch, after: try await highWater(.summaryProposals))
+        for row in summaries {
+            guard let entry = Self.proposal(from: row) else {
+                tally.skipped += 1
+                continue
+            }
+            let filed = try await file(
+                entry, underSession: row.hostSessionId, dryRun: dryRun, tally: &tally, bindings: &bindings)
+            if !filed { tally.skipped += 1 }
+        }
+        if let last = summaries.last { try await move(.summaryProposals, to: last.id, dryRun: dryRun) }
+    }
+
+    /// Files one candidate, bound to the project its session resolved to and unbound when it resolved to none,
+    /// and says whether it filed one — `false` when the row is already in the store, which a run whose cursor
+    /// was lost finds. `origin` is what identifies it, so such a run lands on the row it made, not beside it.
+    ///
+    /// Unlike evidence, a row whose session the store is missing is still filed: a proposal connects to no
+    /// session, so there is nothing for it to be stranded behind, and dropping a one-sided decision because of
+    /// where it was found would lose it.
+    private func file(
+        _ entry: Candidate, underSession key: String, dryRun: Bool, tally: inout Tally,
+        bindings: inout [String: Binding?]
+    ) async throws -> Bool {
+        let filed = try await db.query(DecisionByOriginQuery(.init(origin: entry.origin))).decisions
+        guard filed.isEmpty else { return false }
+        if let slug = (try await binding(forSession: key, in: &bindings))?.slug {
+            try await commit(
+                RecordMigratedProposalMutation(.init(
+                    title: entry.title, rationale: entry.rationale, act: entry.act, origin: entry.origin,
+                    slug: slug)),
+                dryRun)
+        } else {
+            try await commit(
+                RecordMigratedProposalUnboundMutation(.init(
+                    title: entry.title, rationale: entry.rationale, act: entry.act, origin: entry.origin)),
+                dryRun)
+        }
+        tally.proposals += 1
+        return true
     }
 
     // MARK: - Prompts
@@ -374,6 +536,7 @@ public struct MusaiImport: Sendable {
     private struct Tally {
         var sessions = 0
         var evidence = 0
+        var proposals = 0
         var prompts = 0
         var workStates = 0
         var unbound = 0
@@ -395,7 +558,7 @@ public struct MusaiImport: Sendable {
         func report(_ dryRun: Bool) -> ImportReport {
             ImportReport(
                 dryRun: dryRun, sessions: sessions, evidence: evidence, prompts: prompts,
-                workStates: workStates, proposals: 0, projects: projects, ideas: ideas, buckets: buckets,
+                workStates: workStates, proposals: proposals, projects: projects, ideas: ideas, buckets: buckets,
                 unbound: unbound, machinePrompts: machinePrompts, skipped: skipped)
         }
     }

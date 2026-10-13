@@ -76,6 +76,26 @@ public struct SourceEvidence: Sendable, Equatable {
     }
 }
 
+/// One of claude-mem's session summaries, as far as the import needs it: the `next_steps` it left, which is
+/// one side of a choice nobody confirmed. The other prose columns are evidence the evidence stage reads as
+/// observations; this is the one field a proposal can be made of.
+public struct SourceSummary: Sendable, Equatable {
+    public let id: Int
+    /// The host's session id — what a proposal made from this row connects through, exactly as an
+    /// observation's does. claude-mem keys a summary on its own session id, and the reader falls back to it
+    /// when no session row carries it.
+    public let hostSessionId: String
+    /// claude-mem's `next_steps`, verbatim. It is null or empty on many rows, and the caller skips and counts
+    /// those rather than inventing a proposal from nothing.
+    public let nextSteps: String?
+
+    public init(id: Int, hostSessionId: String, nextSteps: String?) {
+        self.id = id
+        self.hostSessionId = hostSessionId
+        self.nextSteps = nextSteps
+    }
+}
+
 /// Something the person typed, as claude-mem recorded it. Whether it is a real prompt or a machine payload
 /// is the import's judgement, not the reader's.
 public struct SourcePrompt: Sendable, Equatable {

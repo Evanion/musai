@@ -14,7 +14,8 @@ import Testing
 
     /// A corpus with the columns the reader uses and rows that pin the mapping: an observation whose `text`
     /// is NULL but which has a title and facts, one with only a narrative, one with nothing at all, a session
-    /// whose two ids differ, a prompt, a work-state list, and a summary table the reader does not read yet.
+    /// whose two ids differ, a prompt, a work-state list, and a summary with the `next_steps` Task 6 makes a
+    /// proposal of.
     private func makeCorpus() throws -> URL {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "musai-claude-mem-\(UUID().uuidString).db")

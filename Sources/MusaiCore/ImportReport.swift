@@ -22,7 +22,8 @@ public struct ImportReport: Sendable, Equatable, Codable {
     public let prompts: Int
     /// Work-state lists created or moved forward this run. They are latest-only: one list is one row.
     public let workStates: Int
-    /// Migrated proposals filed this run. Task 6's stage: zero until it lands.
+    /// Migrated proposals filed this run: the corpus's one-sided entries — its `decision`-typed observations
+    /// and the `next_steps` of summaries — as proposals in their own state, out of the live review list.
     public let proposals: Int
     /// Projects discovery named, in the order the corpus first named them.
     public let projects: [String]
@@ -36,8 +37,10 @@ public struct ImportReport: Sendable, Equatable, Codable {
     /// Prompts dropped as machine apparatus: hook payloads and tool-result echoes.
     public let machinePrompts: Int
     /// Rows read and deliberately not written: evidence whose prose composed to nothing, a prompt with no
-    /// words in it, evidence already in the store, a work state whose label names no project, and a row whose
-    /// session is not in the store to connect it to.
+    /// words in it, evidence already in the store, a work state whose label names no project, a row whose
+    /// session is not in the store to connect it to, and a summary with no `next_steps` to propose from — or
+    /// one whose proposal is already filed. A one-sided observation the proposals stage declines is *not*
+    /// counted here: the evidence stage read the same row and already counted it.
     public let skipped: Int
 
     public init(

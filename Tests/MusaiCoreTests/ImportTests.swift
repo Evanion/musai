@@ -60,6 +60,13 @@ import Testing
                 prompt_number INTEGER NOT NULL,
                 prompt_text TEXT NOT NULL,
                 created_at_epoch INTEGER NOT NULL);
+            CREATE TABLE session_summaries(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_session_id TEXT NOT NULL,
+                project TEXT NOT NULL,
+                request TEXT,
+                next_steps TEXT,
+                created_at_epoch INTEGER NOT NULL);
             CREATE TABLE work_state_entries(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project TEXT NOT NULL,
@@ -205,7 +212,9 @@ import Testing
         #expect(report.evidence == 2)
         #expect(report.prompts == 3)
         #expect(report.workStates == 1)
-        #expect(report.proposals == 0)
+        // This corpus's one `decision`-typed observation is one-sided history, so the proposals stage files it
+        // as a `MIGRATED` proposal — counted here, and nowhere near the live review list.
+        #expect(report.proposals == 1)
         #expect(report.projects == [slug])
         #expect(report.ideas.isEmpty)
         #expect(report.buckets.isEmpty)
