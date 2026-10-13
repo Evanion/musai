@@ -98,7 +98,7 @@ In `SchemaTests`, in the suite's existing style (a library from `MusaiLibrary.in
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `MUSAI_NORVO_PATH=/Volumes/projects/Personal/norvo-swift NORVO_LOCAL=1 swift test --filter SchemaTests`
-Expected: FAIL — `MigratedDecisionsQuery` / `ImportCursorQuery` not in scope.
+Expected: FAIL — `ImportCursorQuery` / `SetImportCursorMutation` not in scope.
 
 - [ ] **Step 3: Write the migrations and `schema.nql`**
 
