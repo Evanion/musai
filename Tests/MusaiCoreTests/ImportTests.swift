@@ -103,15 +103,18 @@ import Testing
         @discardableResult
         func observation(
             id: Int, memory: String, type: String = "discovery", title: String? = nil, facts: String? = nil,
-            narrative: String? = nil, concepts: String? = nil
+            narrative: String? = nil, concepts: String? = nil, at: Int = 1_700_000_000
         ) throws -> Corpus {
+            // The epoch goes in as a Swift `Int`, never as SQL text: SQLite reads an underscored numeric
+            // literal only from 3.46, and the package's floor `.macOS(.v14)` ships an older system SQLite, where
+            // the insert throws.
             try exec("""
             INSERT INTO observations(
                 id, memory_session_id, project, text, type, title, facts, narrative, concepts,
                 created_at_epoch)
             VALUES (\(id), \(Self.literal(memory)), 'claude-mem', NULL, \(Self.literal(type)),
                 \(Self.literal(title)), \(Self.literal(facts)), \(Self.literal(narrative)),
-                \(Self.literal(concepts)), 1_700_000_000);
+                \(Self.literal(concepts)), \(at));
             """)
             return self
         }
@@ -127,11 +130,13 @@ import Testing
         }
 
         @discardableResult
-        func workState(id: Int, project: String, list: String, fields: String) throws -> Corpus {
+        func workState(
+            id: Int, project: String, list: String, fields: String, at: Int = 1_700_000_000
+        ) throws -> Corpus {
             try exec("""
             INSERT INTO work_state_entries(id, project, list_name, fields, created_at_epoch)
             VALUES (\(id), \(Self.literal(project)), \(Self.literal(list)), \(Self.literal(fields)),
-                1_700_000_000);
+                \(at));
             """)
             return self
         }

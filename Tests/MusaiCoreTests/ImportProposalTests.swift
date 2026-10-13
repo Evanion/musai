@@ -86,14 +86,15 @@ import Testing
 
         @discardableResult
         func session(
-            id: Int, memory: String?, host: String, label: String = "musai", cwd: String? = nil
+            id: Int, memory: String?, host: String, label: String = "musai", cwd: String? = nil,
+            started: Int = 1_700_000_000
         ) throws -> Corpus {
             try exec("""
             INSERT INTO sdk_sessions(
                 id, memory_session_id, content_session_id, platform_source, project, custom_title,
                 started_at_epoch, completed_at_epoch, status, cwd)
             VALUES (\(id), \(Self.literal(memory)), \(Self.literal(host)), 'claude', \(Self.literal(label)),
-                NULL, 1_700_000_000, NULL, 'completed', \(Self.literal(cwd)));
+                NULL, \(started), NULL, 'completed', \(Self.literal(cwd)));
             """)
             return self
         }
@@ -101,15 +102,18 @@ import Testing
         @discardableResult
         func observation(
             id: Int, memory: String, type: String = "decision", title: String? = nil, facts: String? = nil,
-            narrative: String? = nil
+            narrative: String? = nil, at: Int = 1_700_000_000
         ) throws -> Corpus {
+            // The epoch goes in as a Swift `Int`, never as SQL text: SQLite reads an underscored numeric
+            // literal only from 3.46, and the package's floor `.macOS(.v14)` ships an older system SQLite, where
+            // the insert throws.
             try exec("""
             INSERT INTO observations(
                 id, memory_session_id, project, text, type, title, facts, narrative, concepts,
                 created_at_epoch)
             VALUES (\(id), \(Self.literal(memory)), 'claude-mem', NULL, \(Self.literal(type)),
                 \(Self.literal(title)), \(Self.literal(facts)), \(Self.literal(narrative)), NULL,
-                1_700_000_000);
+                \(at));
             """)
             return self
         }
@@ -117,7 +121,8 @@ import Testing
         @discardableResult
         func summary(
             id: Int, memory: String, request: String? = "a request", investigated: String? = nil,
-            learned: String? = nil, completed: String? = nil, nextSteps: String?
+            learned: String? = nil, completed: String? = nil, nextSteps: String?,
+            at: Int = 1_700_000_000
         ) throws -> Corpus {
             try exec("""
             INSERT INTO session_summaries(
@@ -125,7 +130,7 @@ import Testing
                 created_at_epoch)
             VALUES (\(id), \(Self.literal(memory)), 'claude-mem', \(Self.literal(request)),
                 \(Self.literal(investigated)), \(Self.literal(learned)), \(Self.literal(completed)),
-                \(Self.literal(nextSteps)), 1_700_000_000);
+                \(Self.literal(nextSteps)), \(at));
             """)
             return self
         }
