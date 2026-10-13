@@ -58,6 +58,41 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-swift-
 
+      - name: Probe the runner's environment
+        working-directory: musai
+        run: |
+          echo "=== the machine ==="
+          sw_vers; uname -m; sysctl -n machdep.cpu.brand_string 2>/dev/null || true
+          echo "=== the engine as this job resolved it ==="
+          find .build/artifacts -name norvo -type f 2>/dev/null | head -2 | while read f; do echo "$f"; lipo -archs "$f" 2>&1; done
+          find .build/artifacts -name CNorvoLite -type f 2>/dev/null | head -2 | while read f; do echo "$f"; lipo -archs "$f" 2>&1; done
+
+      # These probes exist because the suite hangs on a runner while passing in 5 seconds on a
+      # developer's Mac, and the only split the log showed was engine-free tests passing and every
+      # engine-touching test never finishing. Two minutes each, and a failure here does not fail the
+      # job, so the log carries the answer either way.
+      - name: Probe — can the engine open a store here?
+        continue-on-error: true
+        timeout-minutes: 3
+        working-directory: musai
+        env:
+          MUSAI_NORVO_PATH: ${{ github.workspace }}/norvo-swift
+          NSUnbufferedIO: "YES"
+        run: |
+          swift test --no-parallel --filter "theGraphMigratesAndIntrospects"
+          echo "PROBE RESULT: the engine opened a store and ran a query"
+
+      - name: Probe — can a listener bind and answer here?
+        continue-on-error: true
+        timeout-minutes: 3
+        working-directory: musai
+        env:
+          MUSAI_NORVO_PATH: ${{ github.workspace }}/norvo-swift
+          NSUnbufferedIO: "YES"
+        run: |
+          swift test --no-parallel --filter "theListenerServesTheEndpoint"
+          echo "PROBE RESULT: a listener bound and answered"
+
       # NORVO_LOCAL is deliberately NOT set. With it unset the package resolves the *released*
       # engine bundle — binaries-v0.0.2, which carries the @convert fix this repository depends on.
       # Setting it would point the build at whatever a local engine checkout happens to contain,
@@ -67,9 +102,13 @@ jobs:
       # `swift test` and the log showed *nothing* after "Build complete!" — SwiftPM's test output is
       # block-buffered when stdout is not a terminal, so a hang hides the very test that hung. If
       # this ever fails to unbuffer, `script -q /dev/null swift test` allocates a pty instead.
+      #
+      # --no-parallel names the culprit: in parallel mode the log shows 208 tests starting at once
+      # and 24 finishing, and only a serial run says which one stopped. Once the hang is fixed this
+      # can go back to SwiftPM's default parallelism.
       - name: Test
         working-directory: musai
         env:
           MUSAI_NORVO_PATH: ${{ github.workspace }}/norvo-swift
           NSUnbufferedIO: "YES"
-        run: swift test
+        run: swift test --no-parallel
