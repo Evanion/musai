@@ -78,7 +78,7 @@ The five conditions the spec implies but no task's tests otherwise exercise. Eac
 - Test: `Tests/MusaiCoreTests/SchemaTests.swift`
 
 **Interfaces:**
-- Produces: `DecisionState.MIGRATED` (appended last, prefix preserved); `ImportCursor { source: String! @unique, highWaterId: Int!, updatedAt: DateTime! }`; and the cursor's own operations, `ImportCursorQuery($source!)` and `SetImportCursorMutation($source!, $highWaterId!, $updatedAt!)`, because the cursor is the one new thing here whose behaviour can be tested without the operations Task 2 adds.
+- Produces: `DecisionState.MIGRATED` (appended last, prefix preserved); `ImportCursor { source: String! @unique, highWaterId: Int! }` — note that **`updatedAt` is built into every Norvo type and must not be declared**; the field the test reads is that built-in. Plus the cursor's own operations, `ImportCursorQuery($source!)` and `SetImportCursorMutation($source!, $highWaterId!)`, because the cursor is the one new thing here whose behaviour can be tested without the operations Task 2 adds.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -102,7 +102,14 @@ Expected: FAIL — `ImportCursorQuery` / `SetImportCursorMutation` not in scope.
 
 - [ ] **Step 3: Write the migrations and `schema.nql`**
 
-`0005_migrated_state.nql` is a byte-copy of `0004_event_expiry.nql` with `enum DecisionState { PROPOSED SETTLED PERSISTED MIGRATED }` and a header comment saying why (the import files one-sided entries as proposals that must not enter the live pending list, and no filter can do it because NorvoQL string filters have no prefix match). `0006_import_cursor.nql` is a byte-copy of `0005` plus the `ImportCursor` type and its own header. Then `schema.nql` becomes identical to `0006`. `operations/import.nql` is new and carries only the cursor's two operations, in `MemoryByProvenance`'s style.
+`0005_migrated_state.nql` is a copy of `0004_event_expiry.nql` with `enum DecisionState { PROPOSED SETTLED PERSISTED MIGRATED }`, and `0006_import_cursor.nql` is a copy of `0005` plus the `ImportCursor` type. Then `schema.nql` becomes identical to `0006`. `operations/import.nql` is new and carries only the cursor's two operations, in `MemoryByProvenance`'s style.
+
+Three things about the migrations that are easy to get wrong:
+
+- **Each migration's `#` header describes its own change**, and is never a copy of the previous migration's header — `0004`'s header talks about the queue's retention and `Decision.origin`, and it is now history, so it does not belong in `0005` or `0006`. `0005`'s header says why `MIGRATED` exists (the import files one-sided entries as proposals that must not enter the live pending list, and no filter can do it because NorvoQL string filters have no prefix match); `0006`'s says why a cursor exists (a watermark, because `drop` deletes a proposal's row *and* its origin, so a resumed import would otherwise resurrect everything already dropped).
+- **`ImportCursor` declares only `source` and `highWaterId`.** `updatedAt` is built into every Norvo type; declaring it is an error.
+- **The existing test `theGraphMigratesAndIntrospects` asserts the migration list exactly** (`NorvoSchema.migrations.map(\.name) == ["0001_init", …, "0004_event_expiry"]`), so it must gain `"0005_migrated_state", "0006_import_cursor"` or the suite fails. Update it in this task.
+- If `norvo check` refuses the appended enum because of `Decision.state`'s `@convert(from: "DecisionState")`, the precedent from `0004`'s ledger is that either adjusting that from-type or dropping the annotation clears it — do whichever the check accepts, and say which in your report.
 
 - [ ] **Step 4: Run `norvo check` and the tests**
 
