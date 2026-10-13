@@ -35,6 +35,16 @@ package).
   ledger, which is git-ignored scratch. File them with `gh issue create`, grouped into fixable
   units — one per file or surface — rather than one per minor, and let genuinely cosmetic items
   stay in the ledger.
+- **A review is budgeted, and the whole-branch review is not a re-read.** Per-task reviews read
+  their own diff; the final whole-branch review gets the task verdicts, a short change summary
+  and the cross-cutting questions — not the entire branch diff, the full spec, the plan and the
+  ledger in one dispatch, and never an open "as many passes as you need". It opens a source file
+  whole only where judgement needs it.
+- **Reviewers run at the mid tier unless the person says otherwise.** The provider's flagship is
+  for a task the person has named as worth it; "the most capable available" is bounded by what the
+  allowance can afford. The mid tier is not a compromise here — it did every task review on the
+  backend slice and found real defects at roughly a twentieth of the flagship's price. One
+  whole-branch review on the flagship cost about half a five-hour allowance.
 - The engine is **NorvoDB** (`/Volumes/projects/Personal/NorvoDB`). Musai consumes the
   NorvoLite Swift package; when it needs something of Norvo, it **files an issue** on the
   Norvo GitHub repo rather than editing Norvo.
