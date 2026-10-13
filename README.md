@@ -4,12 +4,17 @@ A local-first workspace where one person and their AI agents take projects from 
 through specs and plans, to finished — with long-term memory as the connective tissue.
 
 Musai embeds **Norvo Lite** as its engine (single file, C ABI, through the `NorvoLite` Swift
-package). This repository currently holds the data layer, `MusaiCore`: the project graph —
-projects, ideas, specs, plans, tasks, decisions, memories, sessions and the typed links
-between them — as a NorvoQL schema with typed Swift operations.
+package). This repository holds the project graph — projects, ideas, specs, plans, tasks,
+decisions, memories, sessions and the typed links between them — as a NorvoQL schema with typed
+Swift operations, and the backend that owns it: a menu-bar agent that opens the one store,
+serves a loopback endpoint and runs the curator, with the hooks reduced to clients of it.
 
-The design is `docs/superpowers/specs/2026-10-12-musai-design.md`; the plan that builds this
-data layer is `docs/superpowers/plans/2026-10-12-musai-data-model.md`.
+The designs are `docs/superpowers/specs/2026-10-12-musai-design.md`,
+`docs/superpowers/specs/2026-10-12-musai-decision-loop-design.md` and
+`docs/superpowers/specs/2026-10-12-musai-backend-design.md`; the plans that built this are
+`docs/superpowers/plans/2026-10-12-musai-data-model.md`,
+`docs/superpowers/plans/2026-10-12-musai-decision-loop.md` and
+`docs/superpowers/plans/2026-10-13-musai-backend.md`.
 
 ## Develop
 
@@ -37,25 +42,29 @@ swift test --filter ProjectTests    # one suite
 
 ```sh
 swift build
-musai install --claude-code          # merges four hooks into ~/.claude/settings.json, with a backup
+musai install
 ```
 
-Then work a session as usual, run `musai review` to confirm what the curator proposes, and start a new session
-to see what the agent is handed. `docs/claude-code-hooks.md` has each hook, its timeout, the model
-configuration, and how to uninstall.
+`musai install` assembles `~/Applications/Musai.app` with the agent nested inside it, registers the launch
+agent, and merges the hooks into `~/.claude/settings.json` with a backup. `docs/claude-code-hooks.md` has
+each hook, its timeout, the model configuration, and how to uninstall.
 
 ## Try the loop by hand
 
-```sh
-musai install --claude-code
-# work a session in Claude Code as usual, then:
-musai review            # confirm or correct what the curator proposes
-# start a new session and read what the agent is handed
-```
+This is the half a test cannot cover: whether the backend stays out of the person's way.
 
-The question this slice exists to answer is the one a test cannot: **did confirming those proposals feel like
-one keystroke, or like clerk work?** That answer decides whether the model changes and the rest of the host
-matrix are worth building, so it belongs in the next design rather than in someone's memory.
+1. `musai install`, and work a session in Claude Code as usual. The hooks start the agent if it is not
+   already running, so the first capture is the moment the backend comes up — and it should be the last
+   time you notice it.
+2. If anything looks wrong — nothing captured, no status item, a hook complaining — run `musai doctor`. It
+   reads the record, asks `/health` when the agent answers, and prints the tail of the log.
+3. Run `musai review`, and confirm or correct what the curator proposes.
+4. Start a new session, and read what the agent is handed: the decisions you confirmed, in your own words,
+   and where each one landed.
+
+Then answer the question this slice exists to answer: **did the backend stay invisible until you went
+looking for it?** That answer — not the tests — decides whether the window app and the rest of the host
+matrix are worth building, so record it in the next design rather than in someone's memory.
 
 ## Layout
 
@@ -71,5 +80,7 @@ Sources/MusaiCore/
 `.nql` files are excluded from compilation; the `NorvoCodegen` build plugin turns them into
 `Norvo.generated.swift` (the typed operations and `NorvoSchema.migrations`).
 
-`Sources/musai` is the executable the host's hooks call. Everything it does lives in `MusaiCore`, so that
-"a hook can never break the host" is a test rather than a hope.
+`Sources/musai` is the executable the host's hooks call, and it holds everything host-shaped: the payload
+decode, the `Stop` transcript read, the `SessionStart` stdout shape, and the dispatch table. `MusaiCore`
+knows no host at all — a new host is a new adapter there, not a backend change — and `Sources/musai-agent`
+is the process that owns the store. That a hook can never break the host is a test, not a hope.

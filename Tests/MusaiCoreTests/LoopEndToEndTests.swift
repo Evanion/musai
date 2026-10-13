@@ -13,7 +13,9 @@ private struct OneDecisionTransport: ModelTransport {
 }
 
 /// The whole loop, through the host adapter and the client, over a real socket: a captured turn becomes a
-/// proposal, the person confirms it, and the next session is handed it.
+/// proposal, the person confirms it, and the next session is handed it. The drain is the endpoint's own —
+/// the capture only notes the queue, and the curator runs on a debounce window this test hands over — so
+/// nothing here reaches into the controller to force one.
 @Suite struct LoopEndToEndTests {
     private func payload(
         _ event: String, cwd: String, session: String, prompt: String? = nil, tool: String? = nil,
@@ -28,11 +30,23 @@ private struct OneDecisionTransport: ModelTransport {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data()
     }
 
+    /// Polls rather than sleeping a fixed time, so a concurrent result is picked up as soon as it exists.
+    private func eventually(_ condition: @Sendable () async throws -> Bool) async throws {
+        for _ in 0..<300 {
+            if try await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("condition did not hold in time")
+    }
+
     @Test func theLoopRunsFromATurnToTheNextSession() async throws {
-        // The endpoint's curator runs the real drain, offline: the model is the one-decision transport.
+        // The endpoint's curator runs the real drain, offline: the model is the one-decision transport. The
+        // debounce window is this test's to pass, so the drain is the endpoint's and not a race.
         let detector = ModelDecisionDetector(
             provider: OpenAICompatibleProvider(configuration: .default, transport: OneDecisionTransport()))
-        let backend = try await BackendFixture.make(detector: detector)
+        let windows = WindowGate()
+        let backend = try await BackendFixture.make(
+            detector: detector, sleep: { _ in await windows.nap() })
         defer { backend.close() }
         let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
         let dispatch = HookDispatch(client: client)
@@ -84,10 +98,13 @@ private struct OneDecisionTransport: ModelTransport {
         let afterStop = try await backend.library.db.query(EventsForSessionQuery(.init(session: "s1"))).events
         #expect(afterStop.first { $0.kind == .agentTurn }?.text == "I changed a.swift")
 
-        // 5. A capture only notes the queue; the drain runs off the request path. Drive it here, so "nothing
-        //    is left" is an assertion rather than a race.
-        _ = try await backend.controller.drainNow()
-        #expect(try await backend.library.db.query(UndrainedEventsQuery()).events.isEmpty)
+        // 5. A capture only notes the queue; the drain is the endpoint's own, off the request path, on the
+        //    debounce window handed over above. Let the window pass and wait for the endpoint to have drained
+        //    the queue — forcing the drain here would be the test pretending to be the request path.
+        try await eventually { await windows.opened == 1 }
+        await windows.openWindows()
+        try await eventually { try await backend.library.db.query(UndrainedEventsQuery()).events.isEmpty }
+        #expect(await backend.controller.drainCount == 1)  // one burst, one drain
 
         // 6. One keystroke, and it is recorded where it landed.
         let pending = try await client.proposals()
