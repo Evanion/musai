@@ -126,7 +126,11 @@ let store = libraryURL(from: arguments)
 
 let agent: MusaiAgent
 do {
-    agent = try MusaiAgent(libraryURL: store)
+    // The producer is turned on here, where the one process that owns the store decides what it runs: without
+    // it the graph only grows by import and by hand, and claude-mem cannot be switched off.
+    agent = try MusaiAgent(
+        libraryURL: store,
+        filer: ModelMemoryFiler(configuration: (try? ModelConfiguration.load()) ?? .default))
 } catch {
     fail("\(error)")
 }

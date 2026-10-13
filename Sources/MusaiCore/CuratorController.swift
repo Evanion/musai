@@ -7,6 +7,10 @@ import NorvoLite
 public actor CuratorController {
     public let db: Database
     public let detector: any DecisionDetector
+    /// What files the drain's ambient memory, besides its proposals. `nil` — a fixture, or a process nobody
+    /// configured a model for — means the curator proposes decisions only, and the drain then reads nothing
+    /// extra.
+    public let filer: (any MemoryFiler)?
     /// How the passage of a debounce interval happens. Injected, so a test drives time rather than
     /// waiting a real interval out.
     public let sleep: @Sendable (TimeInterval) async -> Void
@@ -33,6 +37,7 @@ public actor CuratorController {
     public init(
         db: Database,
         detector: any DecisionDetector,
+        filer: (any MemoryFiler)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
             try? await Task.sleep(for: .seconds(seconds))
         },
@@ -43,6 +48,7 @@ public actor CuratorController {
     ) {
         self.db = db
         self.detector = detector
+        self.filer = filer
         self.sleep = sleep
         self.debounce = debounce
         self.now = now
@@ -124,8 +130,99 @@ public actor CuratorController {
             curatorState = .idle
             runningDrain = nil
         }
+        // Read the queue before the proposals consume it: the producer is asked about the same batch the drain
+        // consumed rather than about whatever the next capture left behind. No filer, no read — the producer
+        // adds nothing to a drain that files nothing.
+        let batches: [SessionBatch] = filer == nil ? [] : try await filableBatch()
         // Each event files under its own session's project; the curator resolves that per group.
-        return try await ProposalCurator(db: db, detector: detector).drain(as: MusaiActors.curator)
+        let written = try await ProposalCurator(db: db, detector: detector).drain(as: MusaiActors.curator)
+        try await fileAmbientMemory(batches)
+        return written
+    }
+
+    /// Files the producer's ambient memory, after the proposals and in its own transaction.
+    ///
+    /// A filer that throws costs this batch its ambient memory and nothing else: the decisions from this same
+    /// drain are already written, the queue is drained, and the curator still returns to `idle`. The failure is
+    /// swallowed rather than reported up, because a model that is unreachable is not a fact about the store —
+    /// `onFatal` is for the store, and this is the producer.
+    private func fileAmbientMemory(_ batches: [SessionBatch]) async throws {
+        guard let filer else { return }
+        for batch in batches {
+            let offered: [DetectedMemory]
+            do {
+                offered = try await filer.file(from: batch.events)
+            } catch {
+                // The batch loses its ambient memory and the drain keeps everything else. A model that is down
+                // costs the backfill; it does not cost the decisions, and it is not retried — the queue this
+                // batch came from is drained by now.
+                continue
+            }
+            // The bound is the writer's, not the filer's: a filer is free to offer more, and what lands is at
+            // most `maxPerDrain` memories.
+            let memories = offered.prefix(AmbientMemory.maxPerDrain)
+            guard !memories.isEmpty else { continue }
+            try await db.transaction(as: MusaiActors.curator) { tx in
+                for memory in memories {
+                    // Cut at the one boundary every filer's answer goes through, and truncated rather than
+                    // refused: a long line is still what happened.
+                    let text = String(memory.text.prefix(AmbientMemory.maxTextCharacters))
+                    guard !text.isEmpty else { continue }
+                    let kind = AmbientMemory.filedKind(memory.kind)
+                    // An empty list is spelled `nil`: the engine refuses an empty array for a `[String!]`
+                    // variable (`variable $concepts: String does not take tag 85`), and a memory with no
+                    // concepts is a memory with none.
+                    let concepts = memory.concepts.isEmpty ? nil : memory.concepts
+                    if let slug = batch.slug {
+                        _ = try await tx.mutate(
+                            RecordMemoryForSessionMutation(
+                                .init(
+                                    kind: kind, origin: .ambient, text: text, narrative: memory.narrative,
+                                    concepts: concepts, slug: slug,
+                                    memorySessionId: batch.session)))
+                    } else {
+                        _ = try await tx.mutate(
+                            RecordMemoryUnboundMutation(
+                                .init(
+                                    kind: kind, origin: .ambient, text: text, narrative: memory.narrative,
+                                    concepts: concepts, memorySessionId: batch.session)))
+                    }
+                }
+            }
+        }
+    }
+
+    /// One session's slice of a drain's batch: the events the filer is asked about, and where what it offers may
+    /// bind. Grouped by session because a memory binds to the session it came from and `DetectedMemory` names
+    /// none — one session in the queue, the ordinary case, is therefore one filer call, and two sessions cannot
+    /// have each other's memories filed against them.
+    private struct SessionBatch {
+        let session: String
+        let slug: String?
+        let events: [DetectedEvent]
+    }
+
+    /// The queue as the producer sees it: the rows this drain is about to consume, read with the same bound and
+    /// in the same order, and grouped by session.
+    ///
+    /// A session the store holds no project for files unbound rather than being skipped: the events are still
+    /// what happened. An event whose session is not in the store has nothing to bind to at all, and a memory
+    /// may not be filed against a session that does not exist.
+    private func filableBatch() async throws -> [SessionBatch] {
+        let rows = try await db.query(UndrainedEventsQuery(.init(first: ProposalCurator.defaultBatch))).events
+        var order: [String] = []
+        var groups: [String: [DetectedEvent]] = [:]
+        var slugs: [String: String] = [:]
+        for row in rows {
+            guard let session = row.session?.memorySessionId else { continue }
+            if groups[session] == nil { order.append(session) }
+            if let slug = row.session?.project?.slug { slugs[session] = slug }
+            groups[session, default: []].append(
+                DetectedEvent(
+                    id: row.id, kind: row.kind, text: row.text, tool: row.tool, target: row.target, at: row.at,
+                    utterance: nil))
+        }
+        return order.map { SessionBatch(session: $0, slug: slugs[$0], events: groups[$0] ?? []) }
     }
 
     /// The queue's own retention, throttled to one a day: drop the drained events that are older than the

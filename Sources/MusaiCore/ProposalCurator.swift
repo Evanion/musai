@@ -9,12 +9,15 @@ public struct ProposalCurator: Sendable {
     public static let maxTitleCharacters = 200
     /// The queue keeps a drained event at least this long; older ones are dropped by `expireDrainedEvents`.
     public static let retentionWindow: TimeInterval = 30 * 24 * 60 * 60
+    /// How many of the queue's events one drain reads. Named so the producer's own read of the queue is the
+    /// same batch this drain consumes, rather than a second bound that can drift from it.
+    public static let defaultBatch = 50
 
     public let db: Database
     public let detector: any DecisionDetector
     public let batch: Int
 
-    public init(db: Database, detector: any DecisionDetector, batch: Int = 50) {
+    public init(db: Database, detector: any DecisionDetector, batch: Int = ProposalCurator.defaultBatch) {
         self.db = db
         self.detector = detector
         self.batch = batch
