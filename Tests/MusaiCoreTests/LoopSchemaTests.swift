@@ -12,6 +12,7 @@ import Testing
         #expect(
             NorvoSchema.migrations.map(\.name) == [
                 "0001_init", "0002_loop", "0003_decision_required", "0004_event_expiry",
+                "0005_migrated_state", "0006_import_cursor",
             ])
 
         _ = try await lib.db.mutate(

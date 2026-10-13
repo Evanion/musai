@@ -65,7 +65,7 @@ type Decision {
   project: Project
   subject: Node
   act: ActKind! @convert(from: "ActKind") @index
-  state: DecisionState! @convert(from: "DecisionState") @index
+  state: DecisionState! @convert(from: "DecisionState!") @index
   settledAt: DateTime
   persistedAt: DateTime
   document: Node
@@ -117,7 +117,7 @@ type Link {
 enum Speaker { USER AGENT SYSTEM }
 enum ActKind { PROPOSAL OBJECTION EXAMPLE CONSTRAINT DECISION QUESTION }
 enum EventKind { USER_TURN AGENT_TURN TOOL_USE SESSION_START OTHER }
-enum DecisionState { PROPOSED SETTLED PERSISTED }
+enum DecisionState { PROPOSED SETTLED PERSISTED MIGRATED }
 
 type Utterance {
   text: String! @fulltext
@@ -138,4 +138,9 @@ type Event {
   drained: Boolean! @index
   drainedAt: DateTime
   session: Session
+}
+
+type ImportCursor {
+  source: String! @unique
+  highWaterId: Int!
 }

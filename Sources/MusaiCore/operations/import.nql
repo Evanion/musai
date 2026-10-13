@@ -1,0 +1,7 @@
+query ImportCursor($source: String!) {
+  importCursor(by: {source: $source}) { id source highWaterId updatedAt }
+}
+
+mutation SetImportCursor($source: String!, $highWaterId: Int!) {
+  upsertImportCursor(by: {source: $source}, input: {source: $source, highWaterId: $highWaterId}) { id }
+}
