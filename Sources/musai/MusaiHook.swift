@@ -43,6 +43,8 @@ struct MusaiHook {
             await Review(client: client).run()
         case "doctor":
             await doctor(arguments: arguments)
+        case "mcp":
+            await mcp()
         case "install":
             if arguments.contains("--uninstall") {
                 uninstall(arguments: arguments)
@@ -51,6 +53,22 @@ struct MusaiHook {
             }
         default:
             return
+        }
+    }
+
+    /// `musai mcp`: line-delimited JSON-RPC over stdio, one message in and one out. The record and the token
+    /// are re-read for **every** message rather than once at startup, because this server outlives the agent
+    /// it was started beside: the agent restarts under launchd and takes a fresh port with it, and a server
+    /// that read the record once would spend the rest of its life calling a port nothing owns. stdout
+    /// carries protocol messages and nothing else — a stray write there corrupts the session — so every
+    /// diagnostic goes to stderr, and a message with no answer (`nil`) simply gets none.
+    static func mcp() async {
+        while let line = readLine(strippingNewline: true) {
+            guard !line.isEmpty else { continue }
+            let client = await handshakenClient()
+            guard let reply = await MusaiMCP(client: client).handle(Data(line.utf8)) else { continue }
+            FileHandle.standardOutput.write(reply)
+            FileHandle.standardOutput.write(Data("\n".utf8))
         }
     }
 
