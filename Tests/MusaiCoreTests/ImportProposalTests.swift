@@ -115,11 +115,16 @@ import Testing
         }
 
         @discardableResult
-        func summary(id: Int, memory: String, nextSteps: String?) throws -> Corpus {
+        func summary(
+            id: Int, memory: String, request: String? = "a request", investigated: String? = nil,
+            learned: String? = nil, completed: String? = nil, nextSteps: String?
+        ) throws -> Corpus {
             try exec("""
             INSERT INTO session_summaries(
-                id, memory_session_id, project, request, next_steps, created_at_epoch)
-            VALUES (\(id), \(Self.literal(memory)), 'claude-mem', 'a request',
+                id, memory_session_id, project, request, investigated, learned, completed, next_steps,
+                created_at_epoch)
+            VALUES (\(id), \(Self.literal(memory)), 'claude-mem', \(Self.literal(request)),
+                \(Self.literal(investigated)), \(Self.literal(learned)), \(Self.literal(completed)),
                 \(Self.literal(nextSteps)), 1_700_000_000);
             """)
             return self
@@ -331,6 +336,88 @@ import Testing
         #expect(
             try await lib.db.query(DecisionByOriginQuery(.init(origin: "claude-mem:observation:2")))
                 .decisions.count == 1)
+    }
+
+    @Test func aSummarysProseBecomesEvidenceAndItsNextStepsAProposal() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let root = try makeWorkingTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let slug = ProjectBinder.slugBase(root.lastPathComponent)
+        let corpus = try Corpus()
+        try corpus
+            .session(id: 1, memory: "cm-1", host: "host-1", label: root.lastPathComponent, cwd: root.path)
+            .summary(
+                id: 1, memory: "cm-1", request: "read the corpus",
+                investigated: "how a summary maps", learned: "its prose is evidence",
+                completed: "the reader", nextSteps: "file the memory")
+
+        let report = try await makeImport(lib, corpus).run()
+
+        // The summary is evidence — the corpus's distilled narrative, which no other stage reads — and its
+        // `next_steps` is the one-sided entry beside it. Counted apart, because they are two things.
+        #expect(report.evidence == 1)
+        #expect(report.proposals == 1)
+
+        let memory = try #require(
+            try await lib.db.query(MemoryByProvenanceQuery(.init(provenance: "claude-mem:summary:1")))
+                .memories.first)
+        #expect(memory.origin == .migrated)
+        #expect(memory.kind == .fact)
+        // The corpus's own name for the table, kept as a concept exactly as an observation's raw type is.
+        #expect(memory.concepts == ["type:summary"])
+        #expect(memory.project?.slug == slug)
+        #expect(memory.session?.memorySessionId == "host-1")
+        // Labelled, so a reader can tell which facet each line came from, and complete: `next_steps` is in the
+        // memory as well as in the proposal, which is what makes the title cap lossless.
+        #expect(
+            memory.text
+                == """
+                Request: read the corpus
+                Investigated: how a summary maps
+                Learned: its prose is evidence
+                Completed: the reader
+                Next steps: file the memory
+                """)
+        #expect(try await migrated(lib, origin: "claude-mem:summary:1")?.title == "file the memory")
+    }
+
+    @Test func aLongTitleIsTruncatedNotRejected() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let root = try makeWorkingTree()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let corpus = try Corpus()
+        // The shape the real corpus holds: a summary's `next_steps` is one line of up to 1 579 characters, and
+        // a one-line `next_steps` becomes the whole title. The live surface rejects a title over 200
+        // (`ProposalCurator.maxTitleCharacters`); an import may not refuse history, so it truncates.
+        let longSteps = (1...70).map { "decision \($0) nobody confirmed" }.joined(separator: " ")
+        let longTitle = (1...25).map { "observation \($0) headline" }.joined(separator: " ")
+        try corpus
+            .session(id: 1, memory: "cm-1", host: "host-1", label: root.lastPathComponent, cwd: root.path)
+            .summary(id: 1, memory: "cm-1", nextSteps: longSteps)
+            .observation(id: 1, memory: "cm-1", type: "decision", title: longTitle)
+
+        let report = try await makeImport(lib, corpus).run()
+
+        #expect(report.proposals == 2)
+        // Truncated at the one write boundary both composition paths go through — never refused, and never a
+        // title longer than the live surface accepts.
+        for origin in ["claude-mem:summary:1", "claude-mem:observation:1"] {
+            #expect(
+                try #require(try await migrated(lib, origin: origin)).title.count
+                    == ProposalCurator.maxTitleCharacters)
+        }
+        #expect(
+            try await migrated(lib, origin: "claude-mem:summary:1")?.title
+                == String(longSteps.prefix(ProposalCurator.maxTitleCharacters)))
+        #expect(
+            try await migrated(lib, origin: "claude-mem:observation:1")?.title
+                == String(longTitle.prefix(ProposalCurator.maxTitleCharacters)))
+        // And nothing is lost corpus-wide: the whole of `next_steps` — the truncated title's source — is in the
+        // summary's own `Memory` beside it.
+        let memory = try #require(
+            try await lib.db.query(MemoryByProvenanceQuery(.init(provenance: "claude-mem:summary:1")))
+                .memories.first)
+        #expect(memory.text?.contains(longSteps) == true)
     }
 
     @Test func droppingAMigratedProposalIsNotUndoneByARerun() async throws {

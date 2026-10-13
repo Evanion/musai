@@ -65,6 +65,9 @@ import Testing
                 memory_session_id TEXT NOT NULL,
                 project TEXT NOT NULL,
                 request TEXT,
+                investigated TEXT,
+                learned TEXT,
+                completed TEXT,
                 next_steps TEXT,
                 created_at_epoch INTEGER NOT NULL);
             CREATE TABLE work_state_entries(

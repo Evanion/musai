@@ -76,22 +76,38 @@ public struct SourceEvidence: Sendable, Equatable {
     }
 }
 
-/// One of claude-mem's session summaries, as far as the import needs it: the `next_steps` it left, which is
-/// one side of a choice nobody confirmed. The other prose columns are evidence the evidence stage reads as
-/// observations; this is the one field a proposal can be made of.
+/// One of claude-mem's session summaries, as the import reads it: **the whole row**, because all of it is
+/// history. A summary is the corpus's distilled narrative, and its five labelled prose columns are the only
+/// place that narrative lives — so every one of them is read: the prose becomes a `Memory` (design §4's
+/// mapping) and `next_steps` is also the one side of a choice nobody confirmed, which the import files as a
+/// proposal. Nothing here is composed or chosen between; a column the corpus left empty comes back empty.
 public struct SourceSummary: Sendable, Equatable {
     public let id: Int
     /// The host's session id — what a proposal made from this row connects through, exactly as an
     /// observation's does. claude-mem keys a summary on its own session id, and the reader falls back to it
     /// when no session row carries it.
     public let hostSessionId: String
+    /// claude-mem's five prose columns, verbatim and each on its own: what was asked, what was looked into,
+    /// what was learned, what was finished, and what is left to do. All five are nullable, and many rows have
+    /// none of them — the caller composes, skips and counts rather than the reader inventing prose.
+    public let request: String?
+    public let investigated: String?
+    public let learned: String?
+    public let completed: String?
     /// claude-mem's `next_steps`, verbatim. It is null or empty on many rows, and the caller skips and counts
     /// those rather than inventing a proposal from nothing.
     public let nextSteps: String?
 
-    public init(id: Int, hostSessionId: String, nextSteps: String?) {
+    public init(
+        id: Int, hostSessionId: String, request: String? = nil, investigated: String? = nil,
+        learned: String? = nil, completed: String? = nil, nextSteps: String?
+    ) {
         self.id = id
         self.hostSessionId = hostSessionId
+        self.request = request
+        self.investigated = investigated
+        self.learned = learned
+        self.completed = completed
         self.nextSteps = nextSteps
     }
 }

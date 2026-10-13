@@ -38,9 +38,10 @@ public struct ImportReport: Sendable, Equatable, Codable {
     public let machinePrompts: Int
     /// Rows read and deliberately not written: evidence whose prose composed to nothing, a prompt with no
     /// words in it, evidence already in the store, a work state whose label names no project, a row whose
-    /// session is not in the store to connect it to, and a summary with no `next_steps` to propose from — or
-    /// one whose proposal is already filed. A one-sided observation the proposals stage declines is *not*
-    /// counted here: the evidence stage read the same row and already counted it.
+    /// session is not in the store to connect it to, and a summary this stage wrote nothing for — its prose
+    /// composed to nothing, or its memory is already in the store or its session is not, with no `next_steps`
+    /// proposal left to file. A one-sided observation the proposals stage declines is *not* counted here: the
+    /// evidence stage read the same row and already counted it.
     public let skipped: Int
 
     public init(

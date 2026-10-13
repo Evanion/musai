@@ -14,8 +14,8 @@ import Testing
 
     /// A corpus with the columns the reader uses and rows that pin the mapping: an observation whose `text`
     /// is NULL but which has a title and facts, one with only a narrative, one with nothing at all, a session
-    /// whose two ids differ, a prompt, a work-state list, and a summary with the `next_steps` Task 6 makes a
-    /// proposal of.
+    /// whose two ids differ, a prompt, a work-state list, and a summary with all five of its labelled prose
+    /// columns filled — which the import reads as evidence, and whose `next_steps` it proposes.
     private func makeCorpus() throws -> URL {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appending(path: "musai-claude-mem-\(UUID().uuidString).db")
@@ -98,8 +98,11 @@ import Testing
         VALUES (1, 'musai', 'musai-backend', '{"status":"doing"}', 1700000004);
         INSERT INTO user_prompts(id, session_db_id, content_session_id, prompt_number, prompt_text, created_at_epoch)
         VALUES (1, 1, 'host-1', 1, 'please read the corpus', 1700000005);
-        INSERT INTO session_summaries(id, memory_session_id, project, request, next_steps, created_at_epoch)
-        VALUES (1, 'cm-1', 'musai', 'read the corpus', 'finish the reader', 1700000006);
+        INSERT INTO session_summaries(
+            id, memory_session_id, project, request, investigated, learned, completed, next_steps,
+            created_at_epoch)
+        VALUES (1, 'cm-1', 'musai', 'read the corpus', 'the five prose columns',
+            'a summary is evidence too', 'the reader', 'finish the reader', 1700000006);
         """)
         return url
     }
@@ -139,6 +142,25 @@ import Testing
         // And a row with none of the three comes back with empty text, for the caller to skip and count.
         #expect(rows[2].text == "")
         #expect(rows[2].kind == .lesson)
+    }
+
+    @Test func aSummaryComesBackWithAllFiveOfItsProseColumns() async throws {
+        let url = try makeCorpus()
+        defer { remove(url) }
+        let reader = try ClaudeMemReader(url: url)
+
+        let rows = try reader.summaries(limit: 10, after: 0)
+
+        #expect(rows.count == 1)
+        // The whole row: claude-mem's distilled narrative is those five labelled columns, and the import reads
+        // every one of them. Nothing is composed here — the reader hands back what the corpus wrote.
+        #expect(rows[0].id == 1)
+        #expect(rows[0].hostSessionId == "host-1")
+        #expect(rows[0].request == "read the corpus")
+        #expect(rows[0].investigated == "the five prose columns")
+        #expect(rows[0].learned == "a summary is evidence too")
+        #expect(rows[0].completed == "the reader")
+        #expect(rows[0].nextSteps == "finish the reader")
     }
 
     @Test func theHostSessionIdIsNotTheMemorySessionId() async throws {
