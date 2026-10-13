@@ -28,6 +28,13 @@ package).
   `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` → plan in
   `docs/superpowers/plans/` → execute.
 - Specs and plans are committed.
+- **Integration is always a pull request — never merge locally.** Work lands by pushing its
+  branch and opening a PR against `main`; the branch and its worktree stay until it lands, and
+  feedback is fixed there.
+- **Unresolved findings are tracked as GitHub issues**, not left only in a plan's workspace
+  ledger, which is git-ignored scratch. File them with `gh issue create`, grouped into fixable
+  units — one per file or surface — rather than one per minor, and let genuinely cosmetic items
+  stay in the ledger.
 - The engine is **NorvoDB** (`/Volumes/projects/Personal/NorvoDB`). Musai consumes the
   NorvoLite Swift package; when it needs something of Norvo, it **files an issue** on the
   Norvo GitHub repo rather than editing Norvo.
