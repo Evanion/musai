@@ -14,6 +14,9 @@ import Foundation
 
 /// A session claude-mem recorded.
 public struct SourceSession: Sendable, Equatable {
+    /// The row's own `sdk_sessions.id` — what a stage's cursor is a watermark of. It defaults to zero for a
+    /// row a test composes by hand; every row the reader returns carries the corpus's own id.
+    public let id: Int
     /// The session's Musai-side key: claude-mem's id when it has one, the host's id when it does not.
     public let memorySessionId: String
     /// The host's session id — what live capture writes, and what an import keys on.
@@ -28,10 +31,11 @@ public struct SourceSession: Sendable, Equatable {
     public let projectLabel: String
 
     public init(
-        memorySessionId: String, hostSessionId: String, platform: String, cwd: String? = nil,
+        id: Int = 0, memorySessionId: String, hostSessionId: String, platform: String, cwd: String? = nil,
         title: String? = nil, status: SessionStatus, startedAt: Date, endedAt: Date? = nil,
         projectLabel: String
     ) {
+        self.id = id
         self.memorySessionId = memorySessionId
         self.hostSessionId = hostSessionId
         self.platform = platform

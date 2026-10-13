@@ -33,6 +33,7 @@ public struct ClaudeMemReader: Sendable {
         """, limit: limit, after: after) { row in
             let memorySessionId = row.text(1) ?? ""
             return SourceSession(
+                id: row.int(0),
                 // claude-mem leaves `memory_session_id` null on many sessions, and those are still
                 // importable; the host's id is the only identity such a row has.
                 memorySessionId: memorySessionId.isEmpty ? row.requiredText(2) : memorySessionId,
