@@ -446,6 +446,8 @@ Expected: FAIL — 404 from the new paths.
 
 A new route goes through the same two gates as every storeless-aware route: the token check first, then the store guard (503 when there is no store). `/memories` with a `q` uses `SearchMemories(q:k:first:)`; with a `project` and no `q`, `MemoriesForProject`; with neither, `MemoriesWithoutProject`. Add `MusaiClient` methods in the shape of the existing `proposals()`/`gap()`, and keep the additions inside `protocolVersion` `1.0` — they are minor.
 
+**`POST /admin/import` runs exactly one pass** — one batch per stage, as `MusaiImport.run()` defines it — and returns that pass's report. It must **not** loop to exhaustion: the endpoint serves one request at a time, so a request that imported a whole 1 GB corpus would hold that slot and block every capture for as long as it ran. One pass per request is what keeps the import short, resumable and idle-friendly; the CLI repeats until a pass reports nothing left (Task 10).
+
 - [ ] **Step 4: Run it to verify it passes**
 
 Run: `swift test --filter "MemoryEndpointTests|ClientTests"`
@@ -589,7 +591,7 @@ Expected: FAIL — unknown subcommand.
 
 - [ ] **Step 3: Write the subcommands and the README**
 
-The subcommands are wiring: they reuse `connectedClient()` and print; every hook path still exits 0. `README.md` gains the first-run flow — `musai install`, then `musai import`, then work, then `musai doctor`/`musai recall` — and says plainly that the import reads claude-mem only, never writes it, and can be run again.
+The subcommands are wiring: they reuse `connectedClient()` and print; every hook path still exits 0. **`musai import` repeats `run()` until a pass imports nothing left** — the endpoint runs one pass per request (Task 7), so the CLI is what drives a whole corpus through, printing the accumulated totals and saying plainly that it can be stopped and resumed. `README.md` gains the first-run flow — `musai install`, then `musai import` (and `musai import --dry-run` first, to see what would be discovered), then work, then `musai doctor`/`musai recall` — and says plainly that the import reads claude-mem only, never writes it, and can be run again.
 
 - [ ] **Step 4: Run the whole suite**
 
