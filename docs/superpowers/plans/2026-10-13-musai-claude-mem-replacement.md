@@ -20,7 +20,8 @@
 - The agent idles at essentially no CPU: no timer unless there is an undrained event.
 - The person's words are stored verbatim; agent words and tool output are references, never output.
 - `Sources/MusaiCore/schema.nql` must equal the **last** file in `Sources/MusaiCore/migrations/`; `norvo check` fails the build otherwise. A schema change is a new numbered migration snapshot plus the same edit to `schema.nql`.
-- Every `swift`/`norvo` command needs `MUSAI_NORVO_PATH=/Volumes/projects/Personal/norvo-swift NORVO_LOCAL=1`.
+- Every `swift` command needs `MUSAI_NORVO_PATH=/Volumes/projects/Personal/norvo-swift NORVO_LOCAL=1`. **`norvo` is not on `PATH`**: invoke the engine's local build directly, `/Volumes/projects/Personal/norvo-swift/Artifacts/norvo.artifactbundle/norvo-macos/bin/norvo check Sources/MusaiCore`, and note it needs no `NORVO_LOCAL`.
+- **A revert does not revert the generated code.** `NorvoCodegen` writes `Norvo.generated.swift` under `.build/plugins/outputs/…`, and it survives a `git checkout` or a removed file — so after an aborted attempt or a revert, `rm -rf .build` (or delete that file) before trusting a red-first run, or the run can come up green from symbols that no longer exist in the sources.
 
 ## Review Focus
 
@@ -109,11 +110,11 @@ Three things about the migrations that are easy to get wrong:
 - **Each migration's `#` header describes its own change**, and is never a copy of the previous migration's header — `0004`'s header talks about the queue's retention and `Decision.origin`, and it is now history, so it does not belong in `0005` or `0006`. `0005`'s header says why `MIGRATED` exists (the import files one-sided entries as proposals that must not enter the live pending list, and no filter can do it because NorvoQL string filters have no prefix match); `0006`'s says why a cursor exists (a watermark, because `drop` deletes a proposal's row *and* its origin, so a resumed import would otherwise resurrect everything already dropped).
 - **`ImportCursor` declares only `source` and `highWaterId`.** `updatedAt` is built into every Norvo type; declaring it is an error.
 - **The existing test `theGraphMigratesAndIntrospects` asserts the migration list exactly** (`NorvoSchema.migrations.map(\.name) == ["0001_init", …, "0004_event_expiry"]`), so it must gain `"0005_migrated_state", "0006_import_cursor"` or the suite fails. Update it in this task.
-- If `norvo check` refuses the appended enum because of `Decision.state`'s `@convert(from: "DecisionState")`, the precedent from `0004`'s ledger is that either adjusting that from-type or dropping the annotation clears it — do whichever the check accepts, and say which in your report.
+- **Appending the enum makes `norvo check` reject the carried `@convert`** — it validates the annotation's `from` against the *previous* snapshot, so `Decision.state` reports ``was `DecisionState!`, not `DecisionState` ``. The remedy is to **re-spell the from-type to the identity**, `@convert(from: "DecisionState!")`, in `0005`, `0006` and `schema.nql`. That identity spelling is **load-bearing and must not be "corrected"**: it is what keeps the *next* append from breaking, and a reader who tidies it back will break the following migration with an error naming an unrelated file. Dropping the annotation also clears the check today, and is more fragile; the Norvo ergonomics issue this merits is filed.
 
 - [ ] **Step 4: Run `norvo check` and the tests**
 
-Run: `norvo check Sources/MusaiCore` then `swift test --filter SchemaTests`
+Run: `/Volumes/projects/Personal/norvo-swift/Artifacts/norvo.artifactbundle/norvo-macos/bin/norvo check Sources/MusaiCore` then `swift test --filter SchemaTests`
 Expected: check passes; PASS.
 
 - [ ] **Step 5: Commit**
@@ -160,7 +161,7 @@ Expected: FAIL — the mutations are not in scope.
 
 - [ ] **Step 3: Write the operations**
 
-Follow `operations/memories.nql`'s existing style: `RecordMemoryForSession` is `RecordMemory` with `project: {connect: {slug: $slug}}` made conditional on the slug being present and a session connect added, so one operation serves bound and unbound evidence; `RecordMigratedProposal` is `RecordProposal` with `state: MIGRATED` set explicitly and the `$utterance` input dropped, its `$slug` optional; `ImportCursorQuery`/`SetImportCursorMutation` mirror `MemoryByProvenance`. `MemoriesWithoutProject` filters `project: {eq: null}`.
+Follow `operations/memories.nql`'s existing style: `RecordMemoryForSession` is `RecordMemory` with `project: {connect: {slug: $slug}}` made conditional on the slug being present and a session connect added, so one operation serves bound and unbound evidence; `RecordMigratedProposal` is `RecordProposal` with `state: MIGRATED` set explicitly and the `$utterance` input dropped, its `$slug` optional; `MemoriesWithoutProject` filters `project: {eq: null}`. (`ImportCursorQuery`/`SetImportCursorMutation` are Task 1's and already exist — do not touch them.)
 
 - [ ] **Step 4: Run it to verify it passes**
 
@@ -171,7 +172,7 @@ Expected: PASS.
 
 ```bash
 git add Sources/MusaiCore/operations Tests/MusaiCoreTests/ImportOperationsTests.swift
-git commit -m "feat: the operations an import needs — unbound memory and sessions, migrated proposals, the cursor"
+git commit -m "feat: the operations an import needs — unbound memory and sessions, and migrated proposals"
 ```
 
 ---
