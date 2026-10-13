@@ -8,7 +8,7 @@ fragment MemoryBits on Memory {
   provenance
   createdAt
   project { slug }
-  session { id memorySessionId }
+  session { id memorySessionId startedAt }
   subject { id }
 }
 
