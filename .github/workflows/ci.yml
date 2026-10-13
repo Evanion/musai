@@ -62,8 +62,14 @@ jobs:
       # engine bundle — binaries-v0.0.2, which carries the @convert fix this repository depends on.
       # Setting it would point the build at whatever a local engine checkout happens to contain,
       # which is how a stale pre-fix build once failed `norvo codegen` here.
+      #
+      # NSUnbufferedIO is set because the first run of this workflow hung for over an hour inside
+      # `swift test` and the log showed *nothing* after "Build complete!" — SwiftPM's test output is
+      # block-buffered when stdout is not a terminal, so a hang hides the very test that hung. If
+      # this ever fails to unbuffer, `script -q /dev/null swift test` allocates a pty instead.
       - name: Test
         working-directory: musai
         env:
           MUSAI_NORVO_PATH: ${{ github.workspace }}/norvo-swift
+          NSUnbufferedIO: "YES"
         run: swift test
