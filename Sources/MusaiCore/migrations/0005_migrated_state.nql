@@ -1,0 +1,157 @@
+# A migrated decision is neither proposed nor settled here, so it needs a state of its own. The claude-mem
+# import reads entries that record one side of a choice, and nobody in this workspace confirmed them: they
+# are filed as proposals, and they must stay out of the live pending list the review surface offers. No
+# query can separate them, because NorvoQL string filters have no prefix match, so the distinction cannot
+# live in `Decision.origin`'s text — the state itself has to carry it.
+#
+# `MIGRATED` is **appended**, never inserted: the engine accepts an enum change only while the values it
+# already knows keep their positions as a prefix, so `PROPOSED SETTLED PERSISTED` do not move. This
+# migration writes no rows — the import sets the state when it files one — so it carries no data step.
+#
+# `Decision.state`'s `@convert(from:)` reads `DecisionState` — the spelling 0003 gave it, where the field
+# became required and the annotation recorded the change. For a while this header carried the identity,
+# `DecisionState!`, as a workaround: the engine re-read a carried annotation against the snapshot
+# immediately before it, so growing the enum above reached the conversion branch and demanded `from` name
+# *that* snapshot's spelling, and the identity was what satisfied it. Norvo 0.0.2 fixed that check, so the
+# workaround is retired and the annotation is spelled naturally again.
+enum ProjectStatus { ACTIVE PAUSED DONE ARCHIVED }
+enum IdeaStatus { OPEN PROMOTED PARKED DROPPED }
+enum SpecKind { REQUIREMENT DESIGN }
+enum PlanStatus { DRAFT ACTIVE DONE }
+enum TaskStatus { TODO DOING BLOCKED DONE }
+enum MemoryKind { DECISION IDEA FACT PREFERENCE TODO LESSON }
+enum MemoryOrigin { AUTHORED AMBIENT MIGRATED }
+enum SessionStatus { ACTIVE COMPLETED FAILED }
+enum LinkKind { DEPENDS_ON RELATES_TO SPAWNED DERIVED_FROM SUPERSEDES REFERENCES }
+
+type Project {
+  name: String!
+  slug: String! @unique
+  status: ProjectStatus! @index
+  summary: String @fulltext
+  repoRemote: String @index
+  rootPath: String @index
+  ideas: [Idea!]! @inverse(of: "project")
+  specs: [Spec!]! @inverse(of: "project")
+  plans: [Plan!]! @inverse(of: "project")
+  tasks: [Task!]! @inverse(of: "project")
+  memories: [Memory!]! @inverse(of: "project")
+  decisions: [Decision!]! @inverse(of: "project")
+  sessions: [Session!]! @inverse(of: "project")
+}
+
+type Idea {
+  title: String!
+  body: String @fulltext
+  status: IdeaStatus! @index
+  project: Project
+  spawnedProject: Project
+}
+
+type Spec {
+  title: String!
+  kind: SpecKind! @index
+  body: String @fulltext
+  position: Int
+  project: Project! 
+  plans: [Plan!]! @inverse(of: "spec")
+}
+
+type Plan {
+  title: String!
+  body: String @fulltext
+  status: PlanStatus! @index
+  project: Project!
+  spec: Spec
+  tasks: [Task!]! @inverse(of: "plan")
+}
+
+type Task {
+  title: String!
+  detail: String
+  status: TaskStatus! @index
+  position: Int
+  project: Project!
+  plan: Plan
+}
+
+type Decision {
+  title: String!
+  rationale: String @fulltext
+  project: Project
+  subject: Node
+  act: ActKind! @convert(from: "ActKind") @index
+  state: DecisionState! @convert(from: "DecisionState") @index
+  settledAt: DateTime
+  persistedAt: DateTime
+  document: Node
+  documentRef: String
+  utterance: Utterance
+  origin: String @index
+}
+
+type Memory @plural(name: "memories") {
+  kind: MemoryKind! @index
+  origin: MemoryOrigin! @index
+  text: String @fulltext
+  narrative: String
+  concepts: [String!]
+  subject: Node
+  provenance: String @index
+  embedding: Vector @vector(dims: 1024, model: "qwen3-embedding-0.6b")
+  project: Project
+  session: Session
+}
+
+type Session {
+  memorySessionId: String! @unique
+  platform: String! @index
+  cwd: String @index
+  title: String
+  status: SessionStatus! @index
+  startedAt: DateTime! @index
+  endedAt: DateTime
+  project: Project
+  memories: [Memory!]! @inverse(of: "session")
+  utterances: [Utterance!]! @inverse(of: "session")
+  events: [Event!]! @inverse(of: "session")
+}
+
+type WorkState @plural(name: "workStates") {
+  project: Project!
+  listName: String! @index
+  fields: JSON
+  origin: String @index
+}
+
+type Link {
+  kind: LinkKind! @index
+  source: Node
+  target: Node
+}
+
+enum Speaker { USER AGENT SYSTEM }
+enum ActKind { PROPOSAL OBJECTION EXAMPLE CONSTRAINT DECISION QUESTION }
+enum EventKind { USER_TURN AGENT_TURN TOOL_USE SESSION_START OTHER }
+enum DecisionState { PROPOSED SETTLED PERSISTED MIGRATED }
+
+type Utterance {
+  text: String! @fulltext
+  at: DateTime! @index
+  speaker: Speaker! @index
+  origin: String @index
+  session: Session
+  decisions: [Decision!]! @inverse(of: "utterance")
+}
+
+type Event {
+  kind: EventKind! @index
+  text: String
+  tool: String
+  target: String
+  digest: String
+  at: DateTime! @index
+  drained: Boolean! @index
+  drainedAt: DateTime
+  session: Session
+}

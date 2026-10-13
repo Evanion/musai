@@ -64,6 +64,7 @@ public enum MusaiDiagnostics {
         lines.append("uptime: up \(uptime(since: health.startedAt)) (since \(health.startedAt.formatted(.iso8601)))")
         lines.append("backlog: \(health.backlogDepth) waiting for the curator")
         lines.append("curator: \(health.curatorState.rawValue)")
+        lines.append("producer: \(producerText(health.filerFailures))")
         lines.append("protocol: \(health.protocolVersion)")
         lines.append(contentsOf: bundleNote(bundlePath))
         if health.storeState == .failed {
@@ -84,6 +85,16 @@ public enum MusaiDiagnostics {
 
     private static func storeText(_ state: StoreState) -> String {
         state == .open ? "open" : "could not be opened"
+    }
+
+    /// The producer, as a person reads it. A zero is the ordinary case and says so plainly; a nonzero count is
+    /// the one thing that says the configured model is not answering and batches are being lost. An idle
+    /// backend and a failing producer both leave the backlog flat and the store open, so this line is where
+    /// the two are told apart.
+    private static func producerText(_ failures: Int) -> String {
+        guard failures > 0 else { return "no failed batches (ambient memory is not being lost)" }
+        let batches = failures == 1 ? "1 failed batch" : "\(failures) failed batches"
+        return "\(batches) — the model is not answering, so ambient memory is being lost"
     }
 
     /// Where the bundle is, or that it is not where it was installed. The launch agent names the agent

@@ -8,12 +8,14 @@ fragment MemoryBits on Memory {
   provenance
   createdAt
   project { slug }
-  session { id memorySessionId }
+  session { id memorySessionId startedAt }
   subject { id }
 }
 
-query MemoriesForProject($slug: String!) {
-  memories(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: DESC}]) { ...MemoryBits }
+# `$first` bounds the read as well as the rows: a caller that leaves it out reads the whole project, which
+# is what the slice must not do on `SessionStart`. The slice names its own window; see `MusaiSlice.render`.
+query MemoriesForProject($slug: String!, $first: Int) {
+  memories(where: {project: {slug: {eq: $slug}}}, orderBy: [{createdAt: DESC}], first: $first) { ...MemoryBits }
 }
 
 query MemoriesOfKind($kind: MemoryKind!) {
@@ -22,6 +24,11 @@ query MemoriesOfKind($kind: MemoryKind!) {
 
 query MemoryByProvenance($provenance: String!) {
   memories(where: {provenance: {eq: $provenance}}, first: 1) { ...MemoryBits }
+}
+
+# Most of an imported corpus predates any project: `project: null` is what makes it reachable.
+query MemoriesWithoutProject($first: Int = 200) {
+  memories(where: {project: null}, orderBy: [{createdAt: DESC}], first: $first) { ...MemoryBits }
 }
 
 query MemoryByID($id: ID!) {
@@ -37,6 +44,34 @@ mutation RecordMemory($kind: MemoryKind!, $origin: MemoryOrigin!, $text: String,
     concepts: $concepts
     provenance: $provenance
     project: {connect: {slug: $slug}}
+  }) { id }
+}
+
+# Imported evidence for a session that resolved to a project: it binds to that project and to its session.
+mutation RecordMemoryForSession($kind: MemoryKind!, $origin: MemoryOrigin!, $text: String, $narrative: String, $concepts: [String!], $provenance: String, $slug: String!, $memorySessionId: String!) {
+  createMemory(input: {
+    kind: $kind
+    origin: $origin
+    text: $text
+    narrative: $narrative
+    concepts: $concepts
+    provenance: $provenance
+    project: {connect: {slug: $slug}}
+    session: {connect: {memorySessionId: $memorySessionId}}
+  }) { id }
+}
+
+# The same evidence for a session that resolved to no project. A separate operation because NorvoQL
+# refuses a nullable variable in a oneOf input, so "bind only when there is a slug" cannot be one write.
+mutation RecordMemoryUnbound($kind: MemoryKind!, $origin: MemoryOrigin!, $text: String, $narrative: String, $concepts: [String!], $provenance: String, $memorySessionId: String!) {
+  createMemory(input: {
+    kind: $kind
+    origin: $origin
+    text: $text
+    narrative: $narrative
+    concepts: $concepts
+    provenance: $provenance
+    session: {connect: {memorySessionId: $memorySessionId}}
   }) { id }
 }
 

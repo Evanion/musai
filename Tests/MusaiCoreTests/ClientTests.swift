@@ -112,6 +112,208 @@ import Testing
         await #expect(throws: refusal) { _ = try await client.gap() }
     }
 
+    /// `musai recall`'s read: a word in a memory finds it, even when the memory has no project — the shape most
+    /// of an imported corpus has, and the reason `MemorySummary.project` is optional.
+    @Test func memoriesAreFoundByTextWithNoProject() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        // Two project-less migrated memories, exactly as the import writes them: a session with no `cwd`, and
+        // its evidence connected to that session rather than to a project. The second is what tells a search
+        // from a listing — a `q` that found nothing and listed the project-less memories instead would return
+        // both.
+        _ = try await backend.library.db.mutate(
+            UpsertSessionUnboundMutation(
+                .init(memorySessionId: "host-1", platform: "claude-code", startedAt: at)),
+            as: MusaiActors.migrator("claude-mem"))
+        _ = try await backend.library.db.mutate(
+            UpsertSessionUnboundMutation(
+                .init(memorySessionId: "host-2", platform: "claude-code", startedAt: at)),
+            as: MusaiActors.migrator("claude-mem"))
+        let id = try await backend.library.db.mutate(
+            RecordMemoryUnboundMutation(
+                .init(
+                    kind: .fact, origin: .migrated, text: "Norvo keeps one file",
+                    provenance: "claude-mem:observation:1", memorySessionId: "host-1")),
+            as: MusaiActors.migrator("claude-mem")).createMemory.id
+        _ = try await backend.library.db.mutate(
+            RecordMemoryUnboundMutation(
+                .init(
+                    kind: .fact, origin: .migrated, text: "unrelated words",
+                    provenance: "claude-mem:observation:2", memorySessionId: "host-2")),
+            as: MusaiActors.migrator("claude-mem"))
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+        let found = try await client.memories(q: "Norvo keeps one file")
+
+        #expect(found.map(\.id) == [id])
+        #expect(found.first?.text == "Norvo keeps one file")
+        #expect(found.first?.kind == .fact)
+        #expect(found.first?.origin == .migrated)
+        #expect(found.first?.provenance == "claude-mem:observation:1")
+        #expect(found.first?.project == nil)
+    }
+
+    /// The other half of the read: a project narrows the listing, and a project with nothing in it is an empty
+    /// list rather than an error.
+    @Test func memoriesForAProjectComeBack() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        _ = try await backend.library.db.mutate(
+            CreateProjectMutation(.init(name: "Musai", slug: "musai")), as: MusaiActors.user)
+        _ = try await backend.library.db.mutate(
+            UpsertSessionMutation(
+                .init(memorySessionId: "host-1", platform: "claude-code", startedAt: at, slug: "musai")),
+            as: MusaiActors.user)
+        let id = try await backend.library.db.mutate(
+            RecordMemoryForSessionMutation(
+                .init(
+                    kind: .decision, origin: .authored, text: "One Norvo file", slug: "musai",
+                    memorySessionId: "host-1")),
+            as: MusaiActors.user).createMemory.id
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+        let found = try await client.memories(project: "musai")
+
+        #expect(found.map(\.id) == [id])
+        #expect(found.first?.project == "musai")
+        #expect(found.first?.text == "One Norvo file")
+        #expect(try await client.memories(project: "no-such-project").isEmpty)
+    }
+
+    /// `musai review --migrated`: the imported history has a view of its own, and the live review list is not
+    /// buried under it. A migrated entry is a different type from a `Proposal` because claude-mem recorded no
+    /// utterance for it, so there is no `said` to carry.
+    @Test func theMigrationViewIsSeparateFromTheReviewList() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        let cwd = "/tmp/musai-client-migrated"
+        let said = try await MusaiCapture(db: backend.library.db).captureUserTurn(
+            text: "we will use one Norvo file", at: at, origin: "claude", session: "s1", cwd: cwd,
+            as: MusaiActors.curator)
+        let slug = try #require(
+            try await backend.library.db.query(ProjectByRootQuery(.init(root: cwd))).projects.first?.slug)
+        let live = try await backend.library.db.mutate(
+            RecordProposalMutation(
+                .init(title: "Live one", rationale: nil, act: .decision, utterance: said, project: slug)),
+            as: MusaiActors.curator).createDecision.id
+        let migrated = try await backend.library.db.mutate(
+            RecordMigratedProposalUnboundMutation(
+                .init(title: "Migrated one", act: .decision, origin: "claude-mem:observation:2")),
+            as: MusaiActors.migrator("claude-mem")).createDecision.id
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+        let review = try await client.proposals()
+        let migration = try await client.migrated().proposals
+
+        // The live list carries the one awaiting a decision, and never the imported one.
+        #expect(review.map(\.id) == [live])
+        #expect(review.map(\.title) == ["Live one"])
+
+        // The migration view carries the imported one, with where it came from, and no `said` to fake.
+        #expect(migration.map(\.id) == [migrated])
+        #expect(migration.map(\.title) == ["Migrated one"])
+        #expect(migration.first?.act == .decision)
+        #expect(migration.first?.origin == "claude-mem:observation:2")
+    }
+
+    /// The migration view shows a page of a long import, not the whole of it: the real corpus yields ~6 900
+    /// migrated proposals, so a view of 50 with nothing saying so would look like the whole backlog. The
+    /// answer fetches one more than it returns — the query has no count — and says so as `hasMore`.
+    @Test func theMigrationViewSaysWhenThereIsMore() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        for n in 1...2 {
+            _ = try await backend.library.db.mutate(
+                RecordMigratedProposalUnboundMutation(
+                    .init(title: "Migrated \(n)", act: .decision, origin: "claude-mem:observation:\(n)")),
+                as: MusaiActors.migrator("claude-mem"))
+        }
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        // A bound shorter than the backlog returns exactly the bound and says there is more.
+        let page = try await client.migrated(first: 1)
+        #expect(page.proposals.count == 1)
+        #expect(page.hasMore)
+
+        // The default bound carries both, and says this is all of it.
+        let whole = try await client.migrated()
+        #expect(whole.proposals.count == 2)
+        #expect(whole.hasMore == false)
+    }
+
+    /// A search narrowed to a project honours both: `?project=&q=` returns only that project's hits, rather
+    /// than searching the whole store while the caller believes a filter applied.
+    @Test func aSearchHonoursTheProjectItIsGiven() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        _ = try await backend.library.db.mutate(
+            CreateProjectMutation(.init(name: "Musai", slug: "musai")), as: MusaiActors.user)
+        _ = try await backend.library.db.mutate(
+            CreateProjectMutation(.init(name: "Other", slug: "other")), as: MusaiActors.user)
+        for (slug, session) in [("musai", "host-m"), ("other", "host-o")] {
+            _ = try await backend.library.db.mutate(
+                UpsertSessionMutation(
+                    .init(memorySessionId: session, platform: "claude-code", startedAt: at, slug: slug)),
+                as: MusaiActors.user)
+        }
+        let mine = try await backend.library.db.mutate(
+            RecordMemoryForSessionMutation(
+                .init(
+                    kind: .fact, origin: .authored, text: "Norvo keeps one file", slug: "musai",
+                    memorySessionId: "host-m")),
+            as: MusaiActors.user).createMemory.id
+        _ = try await backend.library.db.mutate(
+            RecordMemoryForSessionMutation(
+                .init(
+                    kind: .fact, origin: .authored, text: "Norvo keeps one file too", slug: "other",
+                    memorySessionId: "host-o")),
+            as: MusaiActors.user)
+
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        // Both memories hold the word, so the whole-store search finds both...
+        #expect(try await client.memories(q: "Norvo").count == 2)
+        // ...and the project narrows that same search to its own hits.
+        let scoped = try await client.memories(project: "musai", q: "Norvo")
+        #expect(scoped.map(\.id) == [mine])
+        #expect(scoped.map(\.project) == ["musai"])
+    }
+
+    /// The import is the agent's work, requested over the endpoint — never a command that opens the store
+    /// itself — and one request is one pass: the CLI repeats it until a pass reports nothing left.
+    @Test func theImportIsRequestedThroughTheEndpoint() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        let corpus = try ClaudeMemCorpus.thread()
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        let report = try await client.importHistory(from: corpus.url)
+
+        // This corpus's one pass: one project-less session, its two observations as migrated evidence, one of
+        // them also as a migrated proposal, one real prompt, and one machine payload dropped.
+        #expect(
+            report
+                == ImportReport(
+                    dryRun: false, sessions: 1, evidence: 2, prompts: 1, proposals: 1,
+                    buckets: ["open-source"], unbound: 1, machinePrompts: 1))
+
+        // It landed in the agent's store, project-less, as migrated history.
+        let memory = try #require(
+            try await backend.library.db.query(
+                MemoryByProvenanceQuery(.init(provenance: "claude-mem:observation:1"))).memories.first)
+        #expect(memory.text == "Norvo keeps one file")
+        #expect(memory.origin == .migrated)
+        #expect(memory.project == nil)
+        #expect(memory.session?.memorySessionId == "host-1")
+        // And it is findable, which is the whole point of importing it: a word nothing else in the store holds.
+        #expect(try await client.memories(q: "Norvo").map(\.id) == [memory.id])
+
+        // A second request has nothing left to do: the cursors are past this corpus, so the report is empty —
+        // which is the signal `musai import` loops on until it stops.
+        #expect(try await client.importHistory(from: corpus.url) == ImportReport())
+    }
+
     @Test func aLiveHandshakeOfAnotherMajorIsRefusedEvenWhenTheRecordAgrees() async throws {
         // The record says 1.0 (the fixture's default) and the live helper answers 2.0. The helper is what would
         // store the words, so the handshake — not the record alone — is the source of truth.

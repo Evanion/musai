@@ -1,6 +1,10 @@
-query SearchMemories($q: String!, $k: Int = 20, $first: Int = 20) {
-  memoriesConnection(search: {text: {field: text, query: $q}, k: $k}, first: $first) {
-    edges { score node { id kind text project { slug } } }
+# The project filter is a variable of the project's own `where` input, not a `String`, so that leaving it out
+# leaves `where` empty rather than narrowing to nothing: an absent scalar would drop only the `eq`, leaving
+# `{project: {slug: {}}}`, which still requires a live project and would hide every project-less hit — most of
+# an imported corpus.
+query SearchMemories($q: String!, $k: Int = 20, $first: Int = 20, $project: ProjectWhere) {
+  memoriesConnection(search: {text: {field: text, query: $q}, k: $k}, where: {project: $project}, first: $first) {
+    edges { score node { id kind text origin provenance project { slug } } }
   }
 }
 

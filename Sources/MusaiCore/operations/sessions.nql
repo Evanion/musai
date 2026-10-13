@@ -7,6 +7,7 @@ fragment SessionBits on Session {
   status
   startedAt
   endedAt
+  project { slug }
 }
 
 query ProjectByRemote($remote: String!) {
@@ -30,6 +31,19 @@ mutation UpsertSession($memorySessionId: String!, $platform: String!, $cwd: Stri
     status: $status
     startedAt: $startedAt
     project: {connect: {slug: $slug}}
+  }) { id }
+}
+
+# An imported session whose cwd resolved to no project — 838 of the corpus's 956. It still has to exist,
+# because its evidence and prompts are written through it.
+mutation UpsertSessionUnbound($memorySessionId: String!, $platform: String!, $cwd: String, $title: String, $status: SessionStatus = ACTIVE, $startedAt: DateTime!) {
+  upsertSession(by: {memorySessionId: $memorySessionId}, input: {
+    memorySessionId: $memorySessionId
+    platform: $platform
+    cwd: $cwd
+    title: $title
+    status: $status
+    startedAt: $startedAt
   }) { id }
 }
 

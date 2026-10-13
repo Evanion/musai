@@ -53,6 +53,11 @@ public final class MusaiAgent: @unchecked Sendable {
     public let state: EndpointState
     /// The model the curator asks for proposals.
     public let detector: any DecisionDetector
+    /// What files the curator's ambient memory. `nil` files none, which is the meaning `nil` has in
+    /// `CuratorController` too: the process that owns the store is where a model is turned on, so a fixture —
+    /// or a backend nobody configured one for — drains without a producer rather than being sent to a model by
+    /// a default it did not ask for.
+    public let filer: (any MemoryFiler)?
 
     private let log: MusaiLog
     private let open: StoreOpener
@@ -75,6 +80,7 @@ public final class MusaiAgent: @unchecked Sendable {
     /// - Parameters:
     ///   - libraryURL: the one store this agent serves, and whose directory holds the record and the token.
     ///   - detector: what the curator asks for proposals; the real one talks to the configured model.
+    ///   - filer: what files the curator's ambient memory; `nil` files none.
     ///   - logURL: where the log a person reads goes. Injectable for the same reason the store is: a test
     ///     must not write into the developer's real `~/Library/Logs/Musai`.
     ///   - open/probe/sleep/attempts: the opening and its backoff, injectable so a test drives a held lock or
@@ -83,6 +89,7 @@ public final class MusaiAgent: @unchecked Sendable {
         libraryURL: URL,
         options: Options = .init(),
         detector: (any DecisionDetector)? = nil,
+        filer: (any MemoryFiler)? = nil,
         logURL: URL = MusaiLog.defaultURL,
         open: @escaping StoreOpener = { url, options in
             try await MusaiLibrary.open(at: url, options: options)
@@ -107,6 +114,7 @@ public final class MusaiAgent: @unchecked Sendable {
             ?? ModelDecisionDetector(
                 provider: OpenAICompatibleProvider(
                     configuration: (try? ModelConfiguration.load()) ?? .default))
+        self.filer = filer
         self.open = open
         self.probe = probe
         self.sleep = sleep
@@ -163,7 +171,7 @@ public final class MusaiAgent: @unchecked Sendable {
             // The curator reports a mid-life fatal through the same state the endpoint does; `state` is captured
             // rather than `self`, so the controller never holds this agent alive.
             curator = CuratorController(
-                db: db, detector: detector, sleep: sleep, debounce: debounce,
+                db: db, detector: detector, filer: filer, sleep: sleep, debounce: debounce,
                 onFatal: { [state] detail in await state.reportFatal(detail) })
         }
         let endpoint = MusaiEndpoint(

@@ -243,4 +243,64 @@ private struct GatedDetector: DecisionDetector {
         #expect(undrained.isEmpty)
         #expect(await gate.proposalCount() == 2)
     }
+
+    /// The drain's second output: the producer is handed the batch the drain consumed, and what it offers is
+    /// filed against the project and the session that capture bound the event to.
+    @Test func aDrainFilesAmbientMemory() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let filer = OfferingFiler(offering: [
+            DetectedMemory(
+                kind: .fact, text: "one Norvo file holds the graph", narrative: "said over a turn",
+                concepts: ["norvo"])
+        ])
+        let controller = CuratorController(
+            db: lib.db, detector: SilentDetector(), filer: filer, sleep: { _ in }, debounce: 1)
+
+        try await turn(lib, "we will use one Norvo file", at: 0)
+        await controller.noteCapture()
+        _ = try await controller.drainNow()
+
+        // Nothing failed, so nothing is counted against the producer.
+        #expect(await controller.filerFailures == 0)
+
+        // It was asked about the events this drain consumed — the turn that was just captured.
+        let asked = try #require(await filer.asked.first)
+        #expect(await filer.asked.count == 1)
+        #expect(asked.count == 1)
+        #expect(asked.first?.kind == .userTurn)
+        #expect(asked.first?.text == "we will use one Norvo file")
+
+        let memories = try await lib.db.query(MemoriesForProjectQuery(.init(slug: "musai-controller"))).memories
+        #expect(memories.count == 1)
+        let memory = try #require(memories.first)
+        #expect(memory.origin == .ambient)
+        #expect(memory.kind == .fact)
+        #expect(memory.text == "one Norvo file holds the graph")
+        #expect(memory.narrative == "said over a turn")
+        #expect(memory.concepts == ["norvo"])
+        #expect(memory.project?.slug == "musai-controller")
+        #expect(memory.session?.memorySessionId == "s1")
+    }
+
+    /// A producer that fails costs the drain nothing: the decisions it proposed in the same drain are written,
+    /// and the curator goes back to idle rather than parking a failed state.
+    @Test func aFilerThatThrowsLeavesTheDrainIntact() async throws {
+        let lib = try await MusaiLibrary.inMemory()
+        let filer = FailingFiler()
+        let controller = CuratorController(
+            db: lib.db, detector: ProposingDetector(), filer: filer, sleep: { _ in }, debounce: 1)
+
+        try await turn(lib, "we will use one Norvo file", at: 0)
+        _ = try await controller.drainNow()
+
+        // The filer really was asked: a controller that never called it would pass this test vacuously.
+        #expect(await filer.calls == 1)
+        // And the failure is not silent at runtime: a misconfigured producer shows up as a count.
+        #expect(await controller.filerFailures == 1)
+        let pending = try await lib.db.query(PendingDecisionsQuery()).decisions
+        #expect(pending.map(\.title) == ["One Norvo file"])
+        #expect(await controller.curatorState == .idle)
+        let memories = try await lib.db.query(MemoriesForProjectQuery(.init(slug: "musai-controller"))).memories
+        #expect(memories.isEmpty)
+    }
 }

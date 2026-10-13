@@ -31,11 +31,12 @@ import Testing
 
     private static func healthy(
         storeState: StoreState = .open, backlog: Int = 3, curator: CuratorState = .draining,
-        startedAt: Date = Date()
+        filerFailures: Int = 0, startedAt: Date = Date()
     ) -> EndpointHealth {
         EndpointHealth(
             protocolVersion: EndpointWire.protocolVersion, storePath: "/tmp/musai-doctor/Musai.norvo",
-            startedAt: startedAt, storeState: storeState, backlogDepth: backlog, curatorState: curator)
+            startedAt: startedAt, storeState: storeState, backlogDepth: backlog, curatorState: curator,
+            filerFailures: filerFailures)
     }
 
     // MARK: - The five states
@@ -102,6 +103,26 @@ import Testing
         #expect(screen.contains("no such file"))
         // It must not claim the store is open when it is not.
         #expect(!screen.contains("— open"))
+    }
+
+    /// The producer's other half of the finding: the count is on the wire, and `doctor` has to show it, or a
+    /// person with no reachable model sees a green backend, a flat backlog and no clue. The wording must tell
+    /// a failing producer apart from an idle one — both leave the backlog flat.
+    @Test func aFailingProducerIsVisibleAndToldApartFromAnIdleOne() {
+        let failing = MusaiDiagnostics.screen(
+            record: Self.record(pid: getpid()), health: Self.healthy(filerFailures: 4),
+            logTail: [], bundlePath: nil)
+        #expect(failing.contains("4 failed batches"))
+        #expect(failing.contains("not answering"))
+        #expect(failing.contains("producer"))
+
+        // An idle producer is not a failing one: a green backend with nothing failing must not read as a loss.
+        let idle = MusaiDiagnostics.screen(
+            record: Self.record(pid: getpid()), health: Self.healthy(filerFailures: 0),
+            logTail: [], bundlePath: nil)
+        #expect(!idle.contains("not answering"))
+        #expect(idle.contains("producer"))
+        #expect(idle != failing)
     }
 
     // MARK: - The log

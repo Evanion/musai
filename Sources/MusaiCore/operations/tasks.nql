@@ -13,8 +13,10 @@ query TasksForPlan($plan: ID!) {
   tasks(where: {plan: {id: {eq: $plan}}}, orderBy: [{position: ASC}, {createdAt: ASC}]) { ...TaskBits }
 }
 
-query TasksForProjectByStatus($slug: String!, $status: TaskStatus!) {
-  tasks(where: {project: {slug: {eq: $slug}}, status: {eq: $status}}, orderBy: [{position: ASC}]) { ...TaskBits }
+# `$first` bounds the read as well as the rows: a caller that leaves it out reads every task of the status,
+# which the slice must not pay for on `SessionStart`. The slice names its own window; see `MusaiSlice.render`.
+query TasksForProjectByStatus($slug: String!, $status: TaskStatus!, $first: Int) {
+  tasks(where: {project: {slug: {eq: $slug}}, status: {eq: $status}}, orderBy: [{position: ASC}], first: $first) { ...TaskBits }
 }
 
 mutation CreateTask($title: String!, $detail: String, $position: Int, $plan: ID!, $slug: String!) {

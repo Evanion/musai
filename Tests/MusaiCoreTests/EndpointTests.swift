@@ -81,6 +81,7 @@ private actor NapGate {
     /// is Task 4's subject; here it only has to stay out of the way.
     private func made(
         detector: any DecisionDetector = QuietDetector(),
+        filer: (any MemoryFiler)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { _ in
             try? await Task.sleep(for: .seconds(3_600))
         }
@@ -91,7 +92,7 @@ private actor NapGate {
         let library = try await MusaiLibrary.open(at: store)
         let state = EndpointState(storePath: store.path)
         let controller = CuratorController(
-            db: library.db, detector: detector, sleep: sleep, debounce: 1)
+            db: library.db, detector: detector, filer: filer, sleep: sleep, debounce: 1)
         let endpoint = MusaiEndpoint(
             store: .open(db: library.db, library: library), state: state, curator: controller,
             token: Self.token)
@@ -135,6 +136,30 @@ private actor NapGate {
         #expect(health.backlogDepth == 3)
         let status = await made.endpoint.state.statusText()
         #expect(status == "backlog(3)")
+    }
+
+    /// The producer's failure mode, on the wire: a model that is not answering costs each drain its ambient
+    /// memory while the store stays healthy, so `/health` staying green is not enough — the count has to
+    /// reach the person, and this pins it reaching the wire. The drain really ran and really lost its batch;
+    /// a controller that never called the filer would pass vacuously.
+    @Test func healthCarriesTheProducersFailures() async throws {
+        let made = try await made(filer: FailingFiler())
+        defer {
+            made.library.close()
+            try? FileManager.default.removeItem(at: made.store.deletingLastPathComponent())
+        }
+        _ = try await MusaiCapture(db: made.library.db).captureUserTurn(
+            text: "we will use one Norvo file", at: Date(timeIntervalSince1970: 1_700_000_000),
+            origin: "claude", session: "s1", cwd: "/tmp/musai-endpoint", as: MusaiActors.curator)
+
+        _ = try await made.controller.drainNow()
+        #expect(await made.controller.filerFailures == 1)
+
+        let response = await made.endpoint.respond(to: request("GET", "/health"))
+        let health = try EndpointWire.decoder().decode(EndpointHealth.self, from: response.body)
+        #expect(health.filerFailures == 1)
+        // And the healthy store it happened to is not a lie about the producer: both are reported.
+        #expect(health.storeState == .open)
     }
 
     @Test func captureStoresAnEvent() async throws {

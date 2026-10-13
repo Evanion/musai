@@ -4,6 +4,7 @@ fragment DecisionBits on Decision {
   rationale
   act
   state
+  origin
   settledAt
   persistedAt
   document { id }
@@ -19,6 +20,11 @@ query PendingDecisions($first: Int = 50) {
 
 query UnpersistedDecisions($first: Int = 50) {
   decisions(where: {state: {eq: SETTLED}}, orderBy: [{createdAt: ASC}], first: $first) { ...DecisionBits }
+}
+
+# Migrated proposals are in their own state so they never sit in `PendingDecisions` in front of live review.
+query MigratedDecisions($first: Int = 50) {
+  decisions(where: {state: {eq: MIGRATED}}, orderBy: [{createdAt: ASC}], first: $first) { ...DecisionBits }
 }
 
 query DecisionByID($id: ID!) {
@@ -44,6 +50,31 @@ mutation RecordProposal($title: String!, $rationale: String, $act: ActKind!, $ut
     state: PROPOSED
     utterance: {connect: {id: $utterance}}
     project: {connect: {slug: $project}}
+    origin: $origin
+  }) { id }
+}
+
+# An imported one-sided decision: it has no utterance to point at, and its state is MIGRATED, so it is
+# proposed to nobody. `origin` is required because it is what a replayed import dedupes on.
+mutation RecordMigratedProposal($title: String!, $rationale: String, $act: ActKind!, $origin: String!, $slug: String!) {
+  createDecision(input: {
+    title: $title
+    rationale: $rationale
+    act: $act
+    state: MIGRATED
+    project: {connect: {slug: $slug}}
+    origin: $origin
+  }) { id }
+}
+
+# The same for an observation under a session that resolved to no project. Separate for the reason
+# `RecordMemoryUnbound` is: a oneOf input refuses a nullable variable.
+mutation RecordMigratedProposalUnbound($title: String!, $rationale: String, $act: ActKind!, $origin: String!) {
+  createDecision(input: {
+    title: $title
+    rationale: $rationale
+    act: $act
+    state: MIGRATED
     origin: $origin
   }) { id }
 }

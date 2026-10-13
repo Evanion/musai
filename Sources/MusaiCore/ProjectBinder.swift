@@ -93,14 +93,34 @@ public struct ProjectBinder: Sendable {
     /// The bound project's slug: by normalized remote, then by root path, then a new Project.
     private func projectSlug(cwd: URL, remote: String?, as actor: Actor) async throws -> String {
         if let known = try await lookupProject(cwd: cwd, remote: remote) { return known }
-        let name = cwd.lastPathComponent
-        let base = Self.slugBase(name)
-        let taken = try await db.query(ProjectBySlugQuery(.init(slug: base))).project != nil
-        let slug = taken ? "\(base)-\(Self.pathSuffix(cwd.path))" : base
+        let slug = try await freshSlug(cwd: cwd, claiming: [])
         _ = try await db.mutate(
-            UpsertProjectMutation(.init(name: name, slug: slug, repoRemote: remote, rootPath: cwd.path)),
+            UpsertProjectMutation(
+                .init(name: cwd.lastPathComponent, slug: slug, repoRemote: remote, rootPath: cwd.path)),
             as: actor)
         return slug
+    }
+
+    /// The slug `cwd` resolves to **without creating anything**: the known project's slug when there is one,
+    /// the slug a new project would take otherwise. A preview must name what it would make without making it,
+    /// and the naming rule lives here so it cannot drift from `projectSlug`.
+    ///
+    /// `claimed` is the slugs an earlier caller in the same pass has already spoken for — a preview of several
+    /// directories at once names them exactly as creating them in order would, rather than handing two
+    /// repositories one slug.
+    public func prospectiveSlug(cwd: URL, claiming claimed: Set<String> = []) async throws -> String {
+        if let known = try await lookupProject(cwd: cwd, remote: Self.gitRemote(for: cwd)) { return known }
+        return try await freshSlug(cwd: cwd, claiming: claimed)
+    }
+
+    /// The slug a *new* project for `cwd` would take: the ASCII base of the directory's own name, and — when
+    /// that is already taken, by the store or by an earlier request — the base plus four bytes of the path.
+    private func freshSlug(cwd: URL, claiming claimed: Set<String>) async throws -> String {
+        let base = Self.slugBase(cwd.lastPathComponent)
+        // `||` takes an autoclosure, which cannot await, so the store is asked first.
+        let stored = try await db.query(ProjectBySlugQuery(.init(slug: base))).project != nil
+        let taken = claimed.contains(base) || stored
+        return taken ? "\(base)-\(Self.pathSuffix(cwd.path))" : base
     }
 
     /// The known project's slug, by normalized remote, then by root path.

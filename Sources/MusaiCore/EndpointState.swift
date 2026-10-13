@@ -29,6 +29,8 @@ public actor EndpointState {
     private var storeState: StoreState = .open
     private var backlogDepth = 0
     private var curatorState: CuratorState = .idle
+    /// Mirrored from the curator at request time, like `curatorState`: the controller counts, this reports.
+    private var filerFailures = 0
     private var askedToRestart = false
 
     /// Handlers the status item drives itself from. Called synchronously from a mutation with the same string
@@ -77,6 +79,14 @@ public actor EndpointState {
         publishStatus()
     }
 
+    /// Mirrored from the curator at request time, like `setCuratorState`. The count only ever grows while a
+    /// producer is misconfigured, so a report that never sees a request is still a report that does not lie
+    /// about the last one. It does not publish a status: the count is not part of the status item's line, and
+    /// an unchanged line is not published.
+    public func setFilerFailures(_ value: Int) {
+        filerFailures = value
+    }
+
     /// A restart was asked for. Answering the request is still this process's job — an endpoint that killed
     /// its own process could not answer the request it was given — so the request is recorded, and the agent
     /// (Task 5), which reads this, ends the process.
@@ -119,7 +129,8 @@ public actor EndpointState {
             startedAt: startedAt,
             storeState: storeState,
             backlogDepth: backlogDepth,
-            curatorState: curatorState)
+            curatorState: curatorState,
+            filerFailures: filerFailures)
     }
 
     /// One line for the status item: what the backend is doing, or what is wrong with it.
