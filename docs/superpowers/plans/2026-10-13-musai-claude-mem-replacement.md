@@ -134,7 +134,7 @@ git commit -m "feat: migrated decisions have their own state, and the import kee
 
 **Interfaces:**
 - Consumes: Task 1's `MIGRATED`.
-- Produces: `RecordMemoryForSession($kind!, $origin!, $text, $narrative, $concepts, $provenance, $slug: String, $memorySessionId: String)` — one operation for both cases, because evidence in a bound session should bind to its project and evidence in an unbound one should not; `MemoriesWithoutProject($first: Int = 200)`; `UpsertSessionUnbound($memorySessionId!, $platform!, $cwd, $title, $status = ACTIVE, $startedAt!)`; `RecordMigratedProposal($title!, $rationale, $act!, $origin: String!, $slug: String)`; `MigratedDecisionsQuery($first: Int = 50)`. (`ImportCursorQuery`/`SetImportCursorMutation` are Task 1's.)
+- Produces: **twins, not one operation** — the engine refuses a mutation whose input branches (`$slug` must be non-null in a oneOf input), so each case is a bound and an unbound form: `RecordMemoryForSession($kind!, $origin!, $text, $narrative, $concepts, $provenance, $slug!, $memorySessionId!)` and `RecordMemoryUnbound($kind!, $origin!, $text, $narrative, $concepts, $provenance, $memorySessionId!)`; `UpsertSessionUnbound($memorySessionId!, $platform!, $cwd, $title, $status = ACTIVE, $startedAt!)`; `RecordMigratedProposal($title!, $rationale, $act!, $origin!, $slug!)` and `RecordMigratedProposalUnbound($title!, $rationale, $act!, $origin!)`; `MigratedDecisionsQuery($first: Int = 50)`; and `MemoriesWithoutProject($first: Int = 200)`, which filters `project: null` — `ProjectWhere` has no `eq`. Both memory twins take a **non-null** `$memorySessionId`, because the session connect is also a oneOf member. Also produced, and load-bearing for Task 6: `DecisionBits.origin` and `SessionBits.project { slug }`. (`ImportCursorQuery`/`SetImportCursorMutation` are Task 1's.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -161,7 +161,7 @@ Expected: FAIL — the mutations are not in scope.
 
 - [ ] **Step 3: Write the operations**
 
-Follow `operations/memories.nql`'s existing style: `RecordMemoryForSession` is `RecordMemory` with `project: {connect: {slug: $slug}}` made conditional on the slug being present and a session connect added, so one operation serves bound and unbound evidence; `RecordMigratedProposal` is `RecordProposal` with `state: MIGRATED` set explicitly and the `$utterance` input dropped, its `$slug` optional; `MemoriesWithoutProject` filters `project: {eq: null}`. (`ImportCursorQuery`/`SetImportCursorMutation` are Task 1's and already exist — do not touch them.)
+Follow `operations/memories.nql`'s existing style. `RecordMemoryForSession` is `RecordMemory` with a session connect and a required `$slug`; `RecordMemoryUnbound` is the same with the project connect removed. `RecordMigratedProposal` is `RecordProposal` with `state: MIGRATED` set explicitly, the `$utterance` input dropped and a required `$slug`; `RecordMigratedProposalUnbound` drops the project too. Add `origin` to `DecisionBits` and `project { slug }` to `SessionBits`, since Task 6 asserts the first and only the second can show a session is unbound. (`ImportCursorQuery`/`SetImportCursorMutation` are Task 1's and already exist — do not touch them.)
 
 - [ ] **Step 4: Run it to verify it passes**
 
@@ -337,7 +337,7 @@ Expected: FAIL — `cannot find 'MusaiImport' in scope`.
 
 - [ ] **Step 3: Write the two files**
 
-Order: sessions first (evidence and prompts need one), then evidence, then prompts, then work state, then proposals (Task 6). Each stage is batched and commits a batch at a time, and the cursor (`ImportCursorQuery`/`SetImportCursorMutation`, one per source stage) advances only past rows that were written or deliberately skipped — the two-character prompts are skipped *after* the cursor has passed them, which is what makes the drop-then-rerun case hold. A session binds to the project discovery found for its `cwd`, and evidence inherits its session's project through `RecordMemoryForSession`'s optional slug, so bound evidence lands bound and unbound evidence lands unbound rather than being skipped. Sessions upsert on the **host** session id (`SourceSession.hostSessionId`), because that is what live capture writes; the field is `memorySessionId` and its name is a later rename. Prompts become utterances with `Speaker.USER` through `operations/capture.nql`'s existing utterance write, truncated with `MusaiCapture.truncated(_:to:)`. The one corpus quirk to respect: `memory_session_id` is not unique-to-us, and the 262 sessions with none are still importable because `content_session_id` is not null.
+Order: sessions first (evidence and prompts need one), then evidence, then prompts, then work state, then proposals (Task 6). Each stage is batched and commits a batch at a time, and the cursor (`ImportCursorQuery`/`SetImportCursorMutation`, one per source stage) advances only past rows that were written or deliberately skipped — the two-character prompts are skipped *after* the cursor has passed them, which is what makes the drop-then-rerun case hold. A session binds to the project discovery found for its `cwd`, and **every write branches on whether it did**: a session or an evidence row whose project is known goes through the bound operation (`RecordMemoryForSession`, `RecordMigratedProposal`), and one with no project through its `…Unbound` twin, so unbound evidence lands unbound rather than being skipped. Forgetting the branch is a compile error — the bound operations require a slug — not a silent mis-bind. Sessions upsert on the **host** session id (`SourceSession.hostSessionId`), because that is what live capture writes; the field is `memorySessionId` and its name is a later rename. Prompts become utterances with `Speaker.USER` through `operations/capture.nql`'s existing utterance write, truncated with `MusaiCapture.truncated(_:to:)`. The one corpus quirk to respect: `memory_session_id` is not unique-to-us, and the 262 sessions with none are still importable because `content_session_id` is not null.
 
 - [ ] **Step 4: Run it to verify it passes**
 
@@ -360,7 +360,7 @@ git commit -m "feat: the import — sessions, evidence, prompts, work state, and
 - Test: `Tests/MusaiCoreTests/ImportProposalTests.swift`
 
 **Interfaces:**
-- Consumes: Task 2's `RecordMigratedProposal` and `MigratedDecisionsQuery`.
+- Consumes: Task 2's `RecordMigratedProposal` and `RecordMigratedProposalUnbound` and `MigratedDecisionsQuery`.
 - Produces: nothing new — the proposals are rows, and `ImportReport.proposals` counts them.
 
 - [ ] **Step 1: Write the failing test**
@@ -388,7 +388,7 @@ Expected: FAIL — no migrated proposals are written.
 
 - [ ] **Step 3: Add the stage**
 
-Fold it into `MusaiImport.run()` after evidence, with its own cursor. Selection: the corpus's `decision`-typed observations, and the `next_steps` of summaries — a rule, not a model call, because ~7 000 candidates through the local model is hours of idle-window work for a one-shot import, and the correction signal survives anyway: confirming or dropping a migrated proposal is the same act as a live one. `title` from the observation's `title` (or the first line of `next_steps`), `act` from the corpus's type via a small table defaulting to `.DECISION`, `origin` = `claude-mem:observation:<id>`. Never write a migrated proposal for an observation whose kind is not decision-ish.
+Fold it into `MusaiImport.run()` after evidence, with its own cursor. Selection: the corpus's `decision`-typed observations, and the `next_steps` of summaries — a rule, not a model call, because ~7 000 candidates through the local model is hours of idle-window work for a one-shot import, and the correction signal survives anyway: confirming or dropping a migrated proposal is the same act as a live one. `title` from the observation's `title` (or the first line of `next_steps`), `act` from the corpus's type via a small table defaulting to `.DECISION`, `origin` = `claude-mem:observation:<id>`, and the project from the observation's session when it has one — through `RecordMigratedProposal`, or its `…Unbound` twin when the session is unbound. Never write a migrated proposal for an observation whose kind is not decision-ish.
 
 - [ ] **Step 4: Run it to verify it passes**
 
