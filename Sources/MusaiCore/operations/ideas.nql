@@ -18,6 +18,14 @@ mutation CreateIdea($title: String!, $body: String, $slug: String!) {
   createIdea(input: {title: $title, body: $body, status: OPEN, project: {connect: {slug: $slug}}}) { id }
 }
 
+# A label that never was a working tree becomes an idea with no project: a thread that lived only in
+# conversation, and which project — if any — it spun off is the person's call, not discovery's. It is a second
+# operation rather than a nullable `$slug` on `CreateIdea`, because NorvoQL refuses a mutation whose input
+# branches, so "connect a project only when there is one" cannot be written as one operation.
+mutation CreateLooseIdea($title: String!) {
+  createIdea(input: {title: $title, status: OPEN}) { id }
+}
+
 mutation PromoteIdea($id: ID!, $project: ID!) {
   updateIdea(by: {id: $id}, set: {status: {set: PROMOTED}, spawnedProject: {connect: {id: $project}}}) { id status }
 }
