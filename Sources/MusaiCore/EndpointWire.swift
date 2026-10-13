@@ -129,10 +129,14 @@ public struct EndpointHealth: Sendable, Equatable, Codable {
     public let storeState: StoreState
     public let backlogDepth: Int
     public let curatorState: CuratorState
+    /// How many filer calls the curator has seen fail since this process started. The store stays healthy and
+    /// the backlog drains, so zero is the ordinary case and a nonzero count is the only thing on the wire that
+    /// says a producer is down rather than idle — the failure mode of a process with no reachable model.
+    public let filerFailures: Int
 
     public init(
         protocolVersion: String, storePath: String, startedAt: Date, storeState: StoreState,
-        backlogDepth: Int, curatorState: CuratorState
+        backlogDepth: Int, curatorState: CuratorState, filerFailures: Int
     ) {
         self.protocolVersion = protocolVersion
         self.storePath = storePath
@@ -140,6 +144,7 @@ public struct EndpointHealth: Sendable, Equatable, Codable {
         self.storeState = storeState
         self.backlogDepth = backlogDepth
         self.curatorState = curatorState
+        self.filerFailures = filerFailures
     }
 }
 

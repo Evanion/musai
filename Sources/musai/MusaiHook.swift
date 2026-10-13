@@ -355,7 +355,9 @@ struct Review {
     ///
     /// The reply says whether it is showing all of it — the endpoint knows by fetching one more than it
     /// returns — and this says so too, because a view of the first 50 of ~6 900 with nothing on it would read
-    /// as the whole backlog. The one option it offers is `--first`, which the endpoint bounds.
+    /// as the whole backlog. The one option it offers is `--first`, which the endpoint bounds; at that bound
+    /// the advice turns to what advances the list, rather than naming a `--first` the endpoint would clamp
+    /// back to this same page.
     private func showMigrated() async {
         do {
             let reply = try await client.migrated(first: first)
@@ -373,15 +375,29 @@ struct Review {
                 write("  · \(proposal.title)   (\(proposal.act.displayName), \(proposal.origin))")
             }
             if reply.hasMore {
-                write(
-                    "more than these \(shown) are waiting — `musai review --migrated --first \(shown * 2)` shows further"
-                )
+                write(Self.migratedMoreLine(shown: shown))
             } else {
                 write("that is all of them")
             }
         } catch {
             diagnose(oneLine(error))
         }
+    }
+
+    /// The line under a migration page that is not the whole of the imported history.
+    ///
+    /// `--first` is offered only while asking for double the page is still inside the endpoint's cap. At the
+    /// cap the endpoint clamps every larger ask back to the same page, and that page's own footer would name
+    /// the same impossible ask again — a circle. So there, the line says what does advance the list instead:
+    /// the ascending page exposes the next rows only once the shown ones are worked through, which moves them
+    /// out of the imported view.
+    static func migratedMoreLine(shown: Int) -> String {
+        guard shown < MusaiEndpoint.migratedFirstCap else {
+            return "more than these \(shown) are waiting — that is the whole page, so the rest appear only "
+                + "as these are worked through: settle or drop some, and `musai review --migrated` shows what follows"
+        }
+        let next = min(shown * 2, MusaiEndpoint.migratedFirstCap)
+        return "more than these \(shown) are waiting — `musai review --migrated --first \(next)` shows further"
     }
 }
 

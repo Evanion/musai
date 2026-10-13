@@ -117,7 +117,13 @@ public struct MusaiEndpoint: Sendable {
             if case .open(let db, _) = store, await state.storeIsOpen {
                 await state.setBacklogDepth(try await undrainedCount(db))
             }
-            if let curator { await state.setCuratorState(curator.curatorState) }
+            if let curator {
+                await state.setCuratorState(curator.curatorState)
+                // The producer's failure count travels with the curator state: a model that is not answering
+                // costs each drain its ambient memory while the store stays healthy, so `/health` green is not
+                // enough, and nothing else on the wire says a producer is down rather than idle.
+                await state.setFilerFailures(curator.filerFailures)
+            }
             return try .json(await state.health())
         } catch {
             return .error(500, Self.oneLine(error))
@@ -363,10 +369,12 @@ public struct MusaiEndpoint: Sendable {
     private static let migratedFirst = 50
     /// The most one request may ask for. The endpoint serves one request at a time, and there are ~6 900
     /// migrated proposals, so the bound keeps a paging surface from walking the whole backlog in one read.
-    private static let migratedFirstCap = 500
+    /// The view's own paging advice reads it, so a person is never sent to a `--first` the endpoint clamps
+    /// straight back to the page they are already looking at.
+    public static let migratedFirstCap = 500
 
-    /// `first` as the request gave it, within the bound. Absent, unreadable or non-positive is the default;
-    /// anything over the cap is the cap.
+    /// `first` as the request gave it, within the bound. Absent or unreadable is the default; a non-positive
+    /// number is read as 1, and anything over the cap is the cap, so every clamped input keeps `hasMore` honest.
     private static func boundedFirst(_ raw: String?) -> Int {
         guard let raw, let asked = Int(raw) else { return migratedFirst }
         return min(max(asked, 1), migratedFirstCap)

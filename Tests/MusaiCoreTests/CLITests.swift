@@ -199,4 +199,25 @@ import Testing
         #expect(whole.contains { $0.contains("Migrated 2") })
         #expect(!whole.contains { $0.contains("--first") })
     }
+
+    /// The paging advice must not dead-end at the endpoint's cap. At the ceiling the old footer kept advising
+    /// `--first \(shown * 2)`, which the endpoint clamps back to the same page and the same advice — a circle.
+    /// The line that `musai review --migrated` prints for a partial page is a pure function of the page size,
+    /// so the ceiling is pinned here without standing up ~6 900 rows; the surface calls it for every page it
+    /// shows, which `reviewMigratedSaysWhenThereIsMoreThanItShows` covers end to end.
+    @Test func theMigrationFooterStopsAdvisingPastTheCap() {
+        let below = Review.migratedMoreLine(shown: 50)
+        #expect(below.contains("--first 100"))
+
+        // Near the cap the advice is clamped to it, rather than naming a `--first` the endpoint would cut back.
+        let near = Review.migratedMoreLine(shown: 400)
+        #expect(near.contains("--first \(MusaiEndpoint.migratedFirstCap)"))
+        #expect(!near.contains("--first 800"))
+
+        // At the cap there is nothing left to ask for, so the line says what does advance the list instead.
+        let atCap = Review.migratedMoreLine(shown: MusaiEndpoint.migratedFirstCap)
+        #expect(!atCap.contains("--first"))
+        #expect(atCap.contains("worked through"))
+        #expect(atCap.contains("more than these \(MusaiEndpoint.migratedFirstCap)"))
+    }
 }

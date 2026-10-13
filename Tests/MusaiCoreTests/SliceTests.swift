@@ -181,6 +181,30 @@ import Testing
         #expect(bulleted + omitted == MusaiSlice.sliceMemoryWindow)
     }
 
+    /// The tasks read is bounded too. Only `DOING` tasks reach it, but a project whose in-progress list grew
+    /// without bound would otherwise cost every `SessionStart` for the whole of it — the same shape the memory
+    /// window exists to avoid. With more in-progress tasks than the window holds, and a budget wide enough to
+    /// show them all, the slice can only ever consider `sliceTaskWindow` of them.
+    @Test func theSliceReadsOnlyItsTaskWindow() async throws {
+        let lib = try await seeded()
+        let plan = try await lib.db.mutate(
+            CreatePlanMutation(.init(title: "Data model", slug: "musai")), as: MusaiActors.user).createPlan.id
+        // One more than the window holds, plus margin: an unbounded read would render all of them.
+        for index in 0..<(MusaiSlice.sliceTaskWindow + 50) {
+            let task = try await lib.db.mutate(
+                CreateTaskMutation(.init(title: "Task \(index)", plan: plan, slug: "musai")),
+                as: MusaiActors.user).createTask.id
+            _ = try await lib.db.mutate(
+                SetTaskStatusMutation(.init(id: task, status: .doing)), as: MusaiActors.user)
+        }
+
+        // A budget far wider than the window's text, so the bound under test is the read and not the render.
+        let text = try await MusaiSlice.render(project: "musai", budget: 100_000, db: lib.db)
+        let rendered = try #require(text)
+        let bulleted = rendered.split(separator: "\n").filter { $0.hasPrefix("- ") }.count
+        #expect(bulleted == MusaiSlice.sliceTaskWindow)
+    }
+
     /// Not a red-then-green test: this is the guard that a project with nothing remembered renders the
     /// very bytes it did before the slice carried memory — no blank line, no header, no stray bullet.
     @Test func aProjectWithNoMemoriesRendersAsBefore() async throws {

@@ -8,6 +8,13 @@ public enum MusaiSlice {
     /// budgeted below; this bounds the *read*, which every `SessionStart` pays for and which would otherwise
     /// grow with the project. See the trade this window buys at the call site in `render`.
     static let sliceMemoryWindow = 200
+    /// How many of a project's tasks in one status the slice reads. Only `DOING` tasks reach the read, so
+    /// this is narrower than the memory window for the same reason that window exists: the read is what every
+    /// `SessionStart` pays for, and it would otherwise grow with the project's in-progress list. A task line is
+    /// a title and a marker — a fraction of a memory's sentence — so the slice's 2 KB output budget caps this
+    /// list long before 100 entries; the window is far above anything the render could show, and bounds a
+    /// project whose in-progress list has grown without one.
+    static let sliceTaskWindow = 100
     /// Held back so the "there is more" line always fits inside the budget.
     private static let reserve = 40
 
@@ -38,7 +45,8 @@ public enum MusaiSlice {
             lines.append("- \(said) (remembered)")
         }
         let doing = try await db.query(
-            TasksForProjectByStatusQuery(.init(slug: project, status: .doing))).tasks
+            TasksForProjectByStatusQuery(.init(slug: project, status: .doing, first: Self.sliceTaskWindow))
+        ).tasks
         for task in doing { lines.append("- \(task.title) (in progress)") }
         guard !lines.isEmpty else { return nil }
 
