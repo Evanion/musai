@@ -36,12 +36,8 @@ struct MusaiHook {
                 await HookDispatch(client: client).run(
                     event: event, stdin: stdin, cwd: FileManager.default.currentDirectoryPath))
         case "review":
-            guard let client = await connectedClient() else {
-                diagnose(noBackend)
-                return
-            }
             await Review(
-                client: client, migrated: arguments.contains("--migrated"),
+                migrated: arguments.contains("--migrated"),
                 first: option("--first", in: arguments).flatMap(Int.init)
             ).run()
         case "import":
@@ -289,98 +285,129 @@ struct MusaiHook {
     }
 }
 
-/// `musai review`, over the endpoint instead of the store: the gap first, then one key per proposal. Input and
-/// output are injected so the loop can be driven by a test, not only by a person at a terminal.
+/// `musai review`, over the endpoint instead of the store: the gap first, then one key per proposal. The live
+/// list and the imported one wear the same surface — the keys are the same and the acts are the same, because
+/// settling an imported entry *is* settling a decision — and which list it walks is the only thing that
+/// differs. Input and output are injected so the loop can be driven by a test, not only by a person at a
+/// terminal.
 struct Review {
-    let client: MusaiClient
     /// `musai review --migrated`: the imported, one-sided history, in the view of its own — the live review
-    /// list deliberately does not carry it, and a review of 6 900 imported entries would bury it.
+    /// list deliberately does not carry it, and a review of ~6 900 imported entries would bury it.
     var migrated: Bool = false
     /// `--first <n>`: how much of the migration view to show. Optional, and the endpoint clamps it: this is a
     /// page of a long backlog, and the reply says whether it is showing all of it.
     var first: Int? = nil
+    /// How the subcommand reaches the backend: a closure, so the missing-backend path is a test and not a
+    /// launchd kickstart against whatever machine happens to be running this.
+    var connect: () async -> MusaiClient? = MusaiHook.connectedClient
     var read: () -> String? = { readLine() }
     var write: (String) -> Void = { print($0) }
     var diagnose: (String) -> Void = { FileHandle.standardError.write(Data("musai: \($0)\n".utf8)) }
 
     func run() async {
-        if migrated {
-            await showMigrated()
+        guard let client = await connect() else {
+            diagnose(MusaiHook.noBackend)
             return
         }
         do {
-            let gap = try await client.gap()
-            if !gap.isEmpty {
-                write("\(gap.count) decision\(gap.count == 1 ? "" : "s") were settled and never recorded anywhere:")
-                for entry in gap { write("  · \(entry.title)") }
-                write("")
-            }
-
-            let proposals = try await client.proposals()
-            guard !proposals.isEmpty else {
-                if gap.isEmpty { write("nothing pending") }
-                return
-            }
-
-            for (index, proposal) in proposals.enumerated() {
-                var headline = "[\(index + 1)/\(proposals.count)] \(proposal.title)   (\(proposal.act.displayName)"
-                if let said = proposal.said { headline += ", said: \"\(said)\"" }
-                write(headline + ")")
-                if let rationale = proposal.rationale { write("  \(rationale)") }
-                write("  [y] settled, landed nowhere   [r] settled, landed at…   [d] drop   [s] skip")
-
-                guard let answer = read()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                else { break }
-                switch answer {
-                case "y":
-                    try await client.apply(.settle, to: proposal.id)
-                case "r":
-                    guard let reference = read()?.trimmingCharacters(in: .whitespacesAndNewlines),
-                        !reference.isEmpty
-                    else { continue }
-                    try await client.apply(.persist(documentRef: reference), to: proposal.id)
-                case "d":
-                    try await client.apply(.drop, to: proposal.id)
-                default:
-                    // An unrecognised key is a skip: a wrong confirmation is worse than a missed one.
-                    continue
-                }
+            if migrated {
+                try await reviewMigrated(client)
+            } else {
+                try await reviewLive(client)
             }
         } catch {
             diagnose(oneLine(error))
         }
     }
 
-    /// `musai review --migrated`: the imported, one-sided history, as the page it is.
+    /// The live review: the gap first — the risk the person came to see — then one key per proposal.
+    private func reviewLive(_ client: MusaiClient) async throws {
+        let gap = try await client.gap()
+        if !gap.isEmpty {
+            write("\(gap.count) decision\(gap.count == 1 ? "" : "s") were settled and never recorded anywhere:")
+            for entry in gap { write("  · \(entry.title)") }
+            write("")
+        }
+
+        let proposals = try await client.proposals()
+        guard !proposals.isEmpty else {
+            if gap.isEmpty { write("nothing pending") }
+            return
+        }
+
+        try await confirm(
+            proposals.map { Entry(id: $0.id, title: $0.title, act: $0.act, said: $0.said, note: $0.rationale) },
+            of: client)
+    }
+
+    /// `musai review --migrated`: the imported, one-sided history, as the page it is — and, now, a page the
+    /// person can work down.
     ///
     /// The reply says whether it is showing all of it — the endpoint knows by fetching one more than it
     /// returns — and this says so too, because a view of the first 50 of ~6 900 with nothing on it would read
     /// as the whole backlog. The one option it offers is `--first`, which the endpoint bounds; at that bound
     /// the advice turns to what advances the list, rather than naming a `--first` the endpoint would clamp
     /// back to this same page.
-    private func showMigrated() async {
-        do {
-            let reply = try await client.migrated(first: first)
-            guard !reply.proposals.isEmpty else {
-                write("nothing imported is waiting")
-                return
+    private func reviewMigrated(_ client: MusaiClient) async throws {
+        let reply = try await client.migrated(first: first)
+        guard !reply.proposals.isEmpty else {
+            write("nothing imported is waiting")
+            return
+        }
+        let shown = reply.proposals.count
+        let entries = "imported entr\(shown == 1 ? "y" : "ies")"
+        write(
+            reply.hasMore
+                ? "the first \(shown) \(entries) await your word:"
+                : "\(shown) \(entries) await your word:")
+        try await confirm(
+            reply.proposals.map {
+                Entry(id: $0.id, title: $0.title, act: $0.act, said: nil, note: "imported from \($0.origin)")
+            },
+            of: client)
+        write(reply.hasMore ? Self.migratedMoreLine(shown: shown) : "that is all of them")
+    }
+
+    /// One entry the confirm loop can act on. Both lists feed the same loop: which list it walked is decided
+    /// by the caller, and everything the loop needs is here — so settling a live proposal and settling an
+    /// imported one are one code path rather than two idioms that could drift.
+    private struct Entry {
+        let id: UUID
+        let title: String
+        let act: ActKind
+        /// The person's own words, from the turn the proposal came from. `nil` for an imported entry:
+        /// claude-mem recorded no utterance for those, and a field that was always empty would read as a
+        /// missing one.
+        let said: String?
+        /// The line under the headline: a live proposal's rationale, or where an imported entry came from.
+        let note: String?
+    }
+
+    /// One key per entry, applied as the person over the endpoint. An unrecognised key is a skip: a wrong
+    /// confirmation is worse than a missed one, and the person can always come back to it.
+    private func confirm(_ entries: [Entry], of client: MusaiClient) async throws {
+        for (index, entry) in entries.enumerated() {
+            var headline = "[\(index + 1)/\(entries.count)] \(entry.title)   (\(entry.act.displayName)"
+            if let said = entry.said { headline += ", said: \"\(said)\"" }
+            write(headline + ")")
+            if let note = entry.note { write("  \(note)") }
+            write("  [y] settled, landed nowhere   [r] settled, landed at…   [d] drop   [s] skip")
+
+            guard let answer = read()?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            else { break }
+            switch answer {
+            case "y":
+                try await client.apply(.settle, to: entry.id)
+            case "r":
+                guard let reference = read()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                    !reference.isEmpty
+                else { continue }
+                try await client.apply(.persist(documentRef: reference), to: entry.id)
+            case "d":
+                try await client.apply(.drop, to: entry.id)
+            default:
+                continue
             }
-            let shown = reply.proposals.count
-            let entries = "imported entr\(shown == 1 ? "y" : "ies")"
-            write(
-                reply.hasMore
-                    ? "the first \(shown) \(entries) await your word:"
-                    : "\(shown) \(entries) await your word:")
-            for proposal in reply.proposals {
-                write("  · \(proposal.title)   (\(proposal.act.displayName), \(proposal.origin))")
-            }
-            if reply.hasMore {
-                write(Self.migratedMoreLine(shown: shown))
-            } else {
-                write("that is all of them")
-            }
-        } catch {
-            diagnose(oneLine(error))
         }
     }
 
@@ -390,7 +417,8 @@ struct Review {
     /// cap the endpoint clamps every larger ask back to the same page, and that page's own footer would name
     /// the same impossible ask again — a circle. So there, the line says what does advance the list instead:
     /// the ascending page exposes the next rows only once the shown ones are worked through, which moves them
-    /// out of the imported view.
+    /// out of the imported view. That advice is now true of this surface, which offers the keys to work
+    /// through them.
     static func migratedMoreLine(shown: Int) -> String {
         guard shown < MusaiEndpoint.migratedFirstCap else {
             return "more than these \(shown) are waiting — that is the whole page, so the rest appear only "

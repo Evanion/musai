@@ -167,8 +167,72 @@ import Testing
         #expect(out == ["Norvo keeps one file"])
     }
 
+    /// `musai review --migrated` is a **confirm surface**, not a listing: the same keys the live review
+    /// offers, over the imported list, acting by id. A settled entry leaves the migrated view, because it is
+    /// the same act and the same move out of the list as settling a live proposal.
+    @Test func reviewMigratedSettlesAnEntryThroughTheCLI() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        let id = try await backend.library.db.mutate(
+            RecordMigratedProposalUnboundMutation(
+                .init(title: "One Norvo file", act: .decision, origin: "claude-mem:observation:1")),
+            as: MusaiActors.migrator("claude-mem")).createDecision.id
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        var out: [String] = []
+        var err: [String] = []
+        await Review(
+            migrated: true, connect: { client }, read: { "y" }, write: { out.append($0) },
+            diagnose: { err.append($0) }
+        ).run()
+
+        #expect(err.isEmpty)
+        #expect(out.contains { $0.contains("One Norvo file") })
+        #expect(
+            try await backend.library.db.query(DecisionByIDQuery(.init(id: id))).decision?.state == .settled)
+        #expect(try await client.migrated().proposals.isEmpty)
+    }
+
+    /// A dropped migrated entry is gone from the store, not merely hidden from the view.
+    @Test func reviewMigratedDropsAnEntryThroughTheCLI() async throws {
+        let backend = try await BackendFixture.make()
+        defer { backend.close() }
+        let id = try await backend.library.db.mutate(
+            RecordMigratedProposalUnboundMutation(
+                .init(title: "Never a repository", act: .decision, origin: "claude-mem:observation:2")),
+            as: MusaiActors.migrator("claude-mem")).createDecision.id
+        let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
+
+        var out: [String] = []
+        var err: [String] = []
+        await Review(
+            migrated: true, connect: { client }, read: { "d" }, write: { out.append($0) },
+            diagnose: { err.append($0) }
+        ).run()
+
+        #expect(err.isEmpty)
+        #expect(try await backend.library.db.query(DecisionByIDQuery(.init(id: id))).decision == nil)
+        #expect(try await client.migrated().proposals.isEmpty)
+    }
+
+    /// A missing backend is one diagnostic line naming `musai install`, on stderr, and nothing on stdout —
+    /// the same fact every other command reports, and no crash when the agent is not running.
+    @Test func reviewMigratedNeedsARunningBackendAndSaysSo() async throws {
+        var out: [String] = []
+        var err: [String] = []
+        await Review(
+            migrated: true, connect: { nil }, read: { nil }, write: { out.append($0) },
+            diagnose: { err.append($0) }
+        ).run()
+
+        #expect(out.isEmpty)
+        #expect(err.count == 1)
+        #expect(err.first?.contains("musai install") == true)
+    }
+
     /// `musai review --migrated` must not show a page of ~6 900 as the whole backlog: the reply carries
-    /// `hasMore`, and a page says so and says how to see further.
+    /// `hasMore`, and a page says so and says how to see further. Every entry is skipped, so the page is
+    /// walked without changing what is waiting.
     @Test func reviewMigratedSaysWhenThereIsMoreThanItShows() async throws {
         let backend = try await BackendFixture.make()
         defer { backend.close() }
@@ -182,7 +246,7 @@ import Testing
 
         var out: [String] = []
         await Review(
-            client: client, migrated: true, first: 1, read: { nil }, write: { out.append($0) },
+            migrated: true, first: 1, connect: { client }, read: { "s" }, write: { out.append($0) },
             diagnose: { _ in }
         ).run()
 
@@ -193,7 +257,8 @@ import Testing
         // With the whole backlog in one page, the same view says that it is all of it.
         var whole: [String] = []
         await Review(
-            client: client, migrated: true, read: { nil }, write: { whole.append($0) }, diagnose: { _ in }
+            migrated: true, connect: { client }, read: { "s" }, write: { whole.append($0) },
+            diagnose: { _ in }
         ).run()
 
         #expect(whole.contains { $0.contains("Migrated 2") })

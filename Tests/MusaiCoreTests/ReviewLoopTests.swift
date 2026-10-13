@@ -29,7 +29,7 @@ import MusaiCore
         var input = ["r", "commit:abc"]
         var lines: [String] = []
         let review = Review(
-            client: client,
+            connect: { client },
             read: { input.isEmpty ? nil : input.removeFirst() },
             write: { lines.append($0) })
         await review.run()
@@ -48,7 +48,7 @@ import MusaiCore
         let client = MusaiClient(record: backend.record(), token: BackendFixture.token)
 
         var lines: [String] = []
-        await Review(client: client, read: { nil }, write: { lines.append($0) }).run()
+        await Review(connect: { client }, read: { nil }, write: { lines.append($0) }).run()
 
         #expect(lines == ["nothing pending"])
     }
@@ -62,7 +62,7 @@ import MusaiCore
         try await client.apply(.settle, to: id)
 
         var lines: [String] = []
-        await Review(client: client, read: { nil }, write: { lines.append($0) }).run()
+        await Review(connect: { client }, read: { nil }, write: { lines.append($0) }).run()
 
         #expect(lines.contains { $0.contains("settled and never recorded anywhere") })
         #expect(lines.contains { $0.contains("One Norvo file") })
