@@ -88,6 +88,29 @@ public actor EndpointState {
 
     public var restartRequested: Bool { askedToRestart }
 
+    /// Handlers told each time the engine declares the store failed while this process is up. The endpoint and
+    /// the curator report through `reportFatal`; the agent is the one that registers — it owns the log and the
+    /// restart, and neither is a decision a router should make.
+    private var fatalObservers: [@Sendable (String) async -> Void] = []
+
+    /// Registers a handler for a fatal the engine surfaces mid-life. It is not a status observer: a status
+    /// observer sees *what* changed, this one is told *why*, and only the agent can act on that.
+    public func observeFatal(_ handler: @escaping @Sendable (String) async -> Void) {
+        fatalObservers.append(handler)
+    }
+
+    /// The engine declared the store failed during a request or a drain. The truth is recorded here — `/health`
+    /// must keep answering with it, even when no one is listening — and told to whoever observes; what to *do*
+    /// about it (say it in the log, ask for a clean process) belongs to the agent, not to this report.
+    public func reportFatal(_ detail: String) async {
+        setStoreState(.failed)
+        for observer in fatalObservers { await observer(detail) }
+    }
+
+    /// Whether the store is still the one that was opened: `false` once the engine has declared it failed.
+    /// `/health` reads this before touching the queue — a store that will not answer must not be asked.
+    public var storeIsOpen: Bool { storeState == .open }
+
     /// The `/health` body.
     public func health() -> EndpointHealth {
         EndpointHealth(

@@ -21,6 +21,18 @@ private actor FatalOnceProbe {
     }
 }
 
+/// Reports the engine's fatal state only once the store is already open: the fatal that develops *while* the
+/// agent is up, which the start-time probe can never see.
+private actor FatalAfterStartProbe {
+    private var checks = 0
+    func check(_ db: Database) async throws {
+        checks += 1
+        if checks > 1 {
+            throw NorvoError(code: .fatal, message: "the store reported a fatal state")
+        }
+    }
+}
+
 /// Collects the status strings an `EndpointState` publishes. Lock-protected, because an observer runs on
 /// whichever executor mutated the state.
 private final class StatusRecorder: @unchecked Sendable {
@@ -154,6 +166,47 @@ private final class StatusRecorder: @unchecked Sendable {
 
         await agent.state.requestRestart()
         #expect(recorder.seen == ["backlog(2)", "needsRestart"])
+    }
+
+    /// The spec's other half: the store can enter a failed state *while the agent is up*, and a client cannot
+    /// say so. A fatal surfaced by a request is logged, the truth reaches `/health` without a 500, and a clean
+    /// process is asked for — the log this slice exists to build must not be blind to the most interesting
+    /// failure there is.
+    @Test func aFatalSurfacedMidLifeIsLoggedAndAsksForARestart() async throws {
+        let store = Self.temporaryStore()
+        let logURL = Self.log(for: store)
+        let probe = FatalAfterStartProbe()
+        let agent = try MusaiAgent(
+            libraryURL: store, detector: SilentDetector(), logURL: logURL,
+            probe: { db in try await probe.check(db) })
+        defer {
+            agent.stop()
+            try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
+        }
+
+        _ = try await agent.start()
+        #expect(await agent.statusText() == "running")
+
+        // The fatal develops mid-life: the next request is where it surfaces, and the hook that hit it gets a
+        // 500 — but the failure itself must not go unrecorded.
+        let record = try HelperRecord.read(from: agent.recordURL)
+        let client = MusaiClient(record: record, token: record.token)
+        _ = try? await client.capture(
+            NormalizedEvent(
+                kind: .userTurn, session: "s1", cwd: "/tmp/musai-agent", at: Date(),
+                text: "words the store cannot hold"))
+
+        // It is said out loud, in the one log a person reads.
+        let tail = MusaiLog(url: logURL).tail(20)
+        #expect(tail.contains { $0.contains("fatal") })
+
+        // `/health` keeps answering with the truth, rather than 500ing into an `.unreachable` a client cannot
+        // tell apart from a dead backend.
+        let health = try #require(await client.health())
+        #expect(health.storeState == .failed)
+
+        // And a clean process was asked for, which the executable honours by exiting for launchd.
+        #expect(await agent.restartRequested())
     }
 
     @Test func itReopensAfterAFailedStoreState() async throws {

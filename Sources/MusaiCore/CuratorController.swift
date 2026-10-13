@@ -17,6 +17,9 @@ public actor CuratorController {
     public let now: @Sendable () -> Date
     /// The longest the retention sweep may go unrun.
     public let sweepInterval: TimeInterval
+    /// What to do when the engine declares the store failed during a drain. Nobody awaits the debounced drain,
+    /// so its failure is otherwise invisible; it is handed up to the agent, which owns the log and the restart.
+    public let onFatal: (@Sendable (String) async -> Void)?
 
     /// What the curator is doing right now: `idle`, `pending` (a drain is scheduled), or `draining`.
     public private(set) var curatorState: CuratorState = .idle
@@ -35,7 +38,8 @@ public actor CuratorController {
         },
         debounce: TimeInterval = 3,
         now: @escaping @Sendable () -> Date = { Date() },
-        sweepInterval: TimeInterval = 24 * 60 * 60
+        sweepInterval: TimeInterval = 24 * 60 * 60,
+        onFatal: (@Sendable (String) async -> Void)? = nil
     ) {
         self.db = db
         self.detector = detector
@@ -43,6 +47,7 @@ public actor CuratorController {
         self.debounce = debounce
         self.now = now
         self.sweepInterval = sweepInterval
+        self.onFatal = onFatal
     }
 
     /// A capture happened: the queue grew. Sets the state to `pending` and schedules the drain, unless one
@@ -62,9 +67,22 @@ public actor CuratorController {
     /// will find whatever this drain leaves behind.
     private func settle() async {
         debounceTask = nil
-        // A failed drain leaves the queue intact (the curator marks nothing drained unless it wrote the
-        // proposals), so the next capture's drain retries it.
-        _ = try? await drainNow()
+        do {
+            _ = try await drainNow()
+        } catch let error as NorvoError where error.code == .fatal {
+            // A failed drain leaves the queue intact and the next capture retries it, but a *fatal* store is not
+            // a queue to retry: it is reported up, like one surfaced by a request, so `/health` can say so.
+            await onFatal?(Self.oneLine(error))
+        } catch {
+            // A failed drain leaves the queue intact (the curator marks nothing drained unless it wrote the
+            // proposals), so the next capture's drain retries it.
+        }
+    }
+
+    /// One line of a failure, cut before the engine's stack dump.
+    private static func oneLine(_ error: any Error) -> String {
+        let text = String(describing: error)
+        return text.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "failed"
     }
 
     /// Drains the queue now, whatever the debounce says. Concurrent callers — a hand-started drain and a

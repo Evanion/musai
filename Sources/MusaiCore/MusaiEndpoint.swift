@@ -30,16 +30,22 @@ public struct MusaiEndpoint: Sendable {
     /// The log a person reads when something is wrong, named in the one line a storeless endpoint answers
     /// with. The agent passes its own; the default is the one a person will find.
     public let logPath: String
+    /// The cheap read that tells a healthy store from one the engine has declared failed, run before each
+    /// store-touching request exactly as the agent runs it at start. `nil` (the default) trusts the store; the
+    /// agent passes its own, and a test can pass one that surfaces a fatal mid-life.
+    public let probe: (@Sendable (Database) async throws -> Void)?
 
     public init(
         store: Store, state: EndpointState, curator: CuratorController? = nil, token: String,
-        logPath: String = MusaiLog.defaultURL.path
+        logPath: String = MusaiLog.defaultURL.path,
+        probe: (@Sendable (Database) async throws -> Void)? = nil
     ) {
         self.store = store
         self.state = state
         self.curator = curator
         self.token = token
         self.logPath = logPath
+        self.probe = probe
     }
 
     public func respond(to request: EndpointRequest) async -> EndpointResponse {
@@ -53,6 +59,10 @@ public struct MusaiEndpoint: Sendable {
         guard case .open(let db, _) = store, let curator else { return noStore() }
 
         do {
+            // A store can enter a failed state while this process is up, and nothing else here would notice:
+            // the same cheap read `openStore` runs at start is run before the work. A fatal is reported up —
+            // never swallowed, and never a decision made in the router — so `/health` can say so.
+            if let probe { try await probe(db) }
             switch (request.method, request.path) {
             case ("POST", "/capture"):
                 return try await capture(request, db: db, curator: curator)
@@ -67,6 +77,12 @@ public struct MusaiEndpoint: Sendable {
             default:
                 return miss(request)
             }
+        } catch let error as NorvoError where error.code == .fatal {
+            // The engine has declared the store failed: record it and tell the agent, which is the one that can
+            // log it and ask for a clean process. This request still gets its 500 — it is the request that found
+            // the failure — but `/health` keeps answering with the truth from here on.
+            await state.reportFatal(Self.oneLine(error))
+            return .error(500, Self.oneLine(error))
         } catch {
             // A failure is a response, never a crash: the endpoint must not take the backend down with it.
             return .error(500, Self.oneLine(error))
@@ -88,7 +104,11 @@ public struct MusaiEndpoint: Sendable {
     /// store that is not there is exactly what must not happen on the one route a person can still reach.
     private func health() async -> EndpointResponse {
         do {
-            if case .open(let db, _) = store {
+            // A store the engine has declared failed is not read again: the queue's depth cannot be mirrored
+            // from a store that will not answer, and `/health` — the one route a person can still reach — must
+            // keep answering with the truth it already holds rather than turning into a 500 no client can tell
+            // apart from a dead backend.
+            if case .open(let db, _) = store, await state.storeIsOpen {
                 await state.setBacklogDepth(try await undrainedCount(db))
             }
             if let curator { await state.setCuratorState(curator.curatorState) }

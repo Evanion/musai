@@ -68,6 +68,9 @@ public final class MusaiAgent: @unchecked Sendable {
     private var curator: CuratorController?
     /// True between `claimStart` and `adopt`, so a concurrent second `start()` is refused.
     private var starting = false
+    /// True once this process asked to be told about a fatal reported through the state, so a retried `start()`
+    /// does not register a second time.
+    private var observingFatal = false
 
     /// - Parameters:
     ///   - libraryURL: the one store this agent serves, and whose directory holds the record and the token.
@@ -122,6 +125,7 @@ public final class MusaiAgent: @unchecked Sendable {
     @discardableResult
     public func start() async throws -> UInt16 {
         guard claimStart() else { throw Failure.alreadyStarted }
+        await observeFatalOnce()
         do {
             return try await performStart()
         } catch {
@@ -156,11 +160,15 @@ public final class MusaiAgent: @unchecked Sendable {
         var curator: CuratorController?
         if case .open(let db, let opened) = store {
             library = opened
+            // The curator reports a mid-life fatal through the same state the endpoint does; `state` is captured
+            // rather than `self`, so the controller never holds this agent alive.
             curator = CuratorController(
-                db: db, detector: detector, sleep: sleep, debounce: debounce)
+                db: db, detector: detector, sleep: sleep, debounce: debounce,
+                onFatal: { [state] detail in await state.reportFatal(detail) })
         }
         let endpoint = MusaiEndpoint(
-            store: store, state: state, curator: curator, token: token, logPath: log.url.path)
+            store: store, state: state, curator: curator, token: token, logPath: log.url.path,
+            probe: probe)
         let listener = EndpointListener(endpoint: endpoint)
         let port = try listener.start()
 
@@ -208,6 +216,32 @@ public final class MusaiAgent: @unchecked Sendable {
         }
         await state.setStoreState(.open)
         return .open(db: opened.db, library: opened)
+    }
+
+    /// Registers for a fatal reported while this process is up, once and once only: a `start()` that threw may
+    /// be tried again, and a second registration would say the same failure twice.
+    private func observeFatalOnce() async {
+        guard claimFatalObservation() else { return }
+        await state.observeFatal { [weak self] detail in
+            await self?.noteFatal(detail)
+        }
+    }
+
+    /// Claims the one registration, synchronously, so the lock is never held across an `await`.
+    private func claimFatalObservation() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !observingFatal else { return false }
+        observingFatal = true
+        return true
+    }
+
+    /// The engine declared the store failed while this process was serving. One line to the log a person reads,
+    /// and a clean process asked for, which the executable honours by exiting for launchd — the start-time path
+    /// is what probes and reopens, and reopening in place is deliberately the app slice's repair, not this one's.
+    private func noteFatal(_ detail: String) async {
+        note("the store reported a fatal state while serving: \(detail)")
+        await state.requestRestart()
     }
 
     /// One line to both places it belongs: the file a person reads with `musai doctor`, and the system log.
