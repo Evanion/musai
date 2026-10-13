@@ -4,10 +4,13 @@ import Foundation
 /// nothing downstream has to know a claude-mem column name, and nothing here is a Musai graph type — a
 /// source row is raw material, not a row.
 ///
-/// Every row carries **both** session ids. `hostSessionId` is the host's session id — the one Musai's live
+/// The session-bearing rows carry two ids. `hostSessionId` is the host's session id — the one Musai's live
 /// capture already writes, and the one a session is keyed on when it is imported; `memorySessionId` is
-/// claude-mem's own, and the two never match. The field name `memorySessionId` on Musai's own `Session` is
-/// a later rename, which is why the host's id is the one that matters.
+/// claude-mem's own. The two are distinct whenever claude-mem has both, but it leaves `memory_session_id`
+/// null on many sessions, and the reader falls back to the host's id for those — so `memorySessionId` can
+/// equal `hostSessionId`, and it is `hostSessionId` that always means the host. The field name
+/// `memorySessionId` on Musai's own `Session` is a later rename, which is why the host's id is the one that
+/// matters.
 
 /// A session claude-mem recorded.
 public struct SourceSession: Sendable, Equatable {

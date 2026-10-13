@@ -77,6 +77,11 @@ import Testing
             started_at_epoch, completed_at_epoch, status, cwd)
         VALUES (1, 'cm-1', 'host-1', 'claude', 'musai', 'A thread',
             1700000000, 1700000600, 'completed', '/Volumes/projects/Personal/Musai');
+        INSERT INTO sdk_sessions(
+            id, memory_session_id, content_session_id, platform_source, project, custom_title,
+            started_at_epoch, completed_at_epoch, status, cwd)
+        VALUES (2, NULL, 'host-2', 'claude', 'musai', NULL,
+            1700000700, NULL, 'active', NULL);
         INSERT INTO observations(
             id, memory_session_id, project, text, type, title, facts, narrative, concepts, created_at_epoch)
         VALUES (1, 'cm-1', 'musai', NULL, 'discovery', 'A title', '["f1","f2"]',
@@ -142,8 +147,8 @@ import Testing
 
         let sessions = try reader.sessions(limit: 10, after: 0)
 
-        #expect(sessions.count == 1)
-        // The two ids both exist and never match; Musai's live capture writes the host's.
+        #expect(sessions.count == 2)
+        // This row has both ids, and they differ; Musai's live capture writes the host's.
         #expect(sessions[0].hostSessionId == "host-1")
         #expect(sessions[0].memorySessionId == "cm-1")
         #expect(sessions[0].platform == "claude")
@@ -153,6 +158,25 @@ import Testing
         #expect(sessions[0].status == .completed)
         #expect(sessions[0].startedAt == Date(timeIntervalSince1970: 1_700_000_000))
         #expect(sessions[0].endedAt == Date(timeIntervalSince1970: 1_700_000_600))
+    }
+
+    @Test func aSessionWithNoMemorySessionIdFallsBackToTheHostId() async throws {
+        let url = try makeCorpus()
+        defer { remove(url) }
+        let reader = try ClaudeMemReader(url: url)
+
+        let sessions = try reader.sessions(limit: 10, after: 0)
+
+        let lonely = try #require(sessions.last)
+        #expect(sessions.count == 2)
+        // claude-mem left `memory_session_id` null, so the host's id is the row's only identity — and the
+        // import still gets a non-empty Musai-side key rather than losing the session.
+        #expect(lonely.hostSessionId == "host-2")
+        #expect(lonely.memorySessionId == lonely.hostSessionId)
+        #expect(lonely.title == nil)
+        #expect(lonely.cwd == nil)
+        #expect(lonely.status == .active)
+        #expect(lonely.endedAt == nil)
     }
 
     @Test func theReaderOpensTheCorpusReadOnly() async throws {
