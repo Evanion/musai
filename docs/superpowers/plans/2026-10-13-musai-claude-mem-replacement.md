@@ -73,24 +73,25 @@ The five conditions the spec implies but no task's tests otherwise exercise. Eac
 
 **Files:**
 - Create: `Sources/MusaiCore/migrations/0005_migrated_state.nql`, `Sources/MusaiCore/migrations/0006_import_cursor.nql`
+- Create: `Sources/MusaiCore/operations/import.nql`
 - Modify: `Sources/MusaiCore/schema.nql`
 - Test: `Tests/MusaiCoreTests/SchemaTests.swift`
 
 **Interfaces:**
-- Produces: `DecisionState.MIGRATED` (appended last, prefix preserved); `ImportCursor { source: String! @unique, highWaterId: Int!, updatedAt: DateTime! }`; generated `ImportCursorQuery`, `SetImportCursorMutation`.
+- Produces: `DecisionState.MIGRATED` (appended last, prefix preserved); `ImportCursor { source: String! @unique, highWaterId: Int!, updatedAt: DateTime! }`; and the cursor's own operations, `ImportCursorQuery($source!)` and `SetImportCursorMutation($source!, $highWaterId!, $updatedAt!)`, because the cursor is the one new thing here whose behaviour can be tested without the operations Task 2 adds.
 
 - [ ] **Step 1: Write the failing test**
 
 In `SchemaTests`, in the suite's existing style (a library from `MusaiLibrary.inMemory()`):
 
 ```swift
-@Test func aMigratedDecisionIsNotPending() async throws {
-    let lib = try await MusaiLibrary.inMemory()
-    _ = try await lib.db.mutate(RecordDecisionMutation(.init(title: "t", rationale: nil, act: .DECISION, slug: "p")))
-    // assert a decision created with state .MIGRATED is absent from PendingDecisions, present in MigratedDecisions
+@Test func migratedIsAnAppendedEnumCase() async throws {
+    // assert DecisionState.MIGRATED.rawValue == "MIGRATED" (the append preserves the prefix the engine requires)
 }
 @Test func theImportCursorRoundTrips() async throws {
-    // assert ImportCursorQuery returns nil, then SetImportCursorMutation(.init(source:highWaterId:updatedAt:)) then a query returns it
+    // ImportCursorQuery returns nil for an unknown source
+    // SetImportCursorMutation(source: "observations", highWaterId: 42, updatedAt: now)
+    // ImportCursorQuery returns highWaterId 42, and setting it again moves it rather than adding a row
 }
 ```
 
@@ -101,7 +102,7 @@ Expected: FAIL — `MigratedDecisionsQuery` / `ImportCursorQuery` not in scope.
 
 - [ ] **Step 3: Write the migrations and `schema.nql`**
 
-`0005_migrated_state.nql` is a byte-copy of `0004_event_expiry.nql` with `enum DecisionState { PROPOSED SETTLED PERSISTED MIGRATED }` and a header comment saying why (the import files one-sided entries as proposals that must not enter the live pending list, and no filter can do it because NorvoQL string filters have no prefix match). `0006_import_cursor.nql` is a byte-copy of `0005` plus the `ImportCursor` type and its own header. Then `schema.nql` becomes identical to `0006`.
+`0005_migrated_state.nql` is a byte-copy of `0004_event_expiry.nql` with `enum DecisionState { PROPOSED SETTLED PERSISTED MIGRATED }` and a header comment saying why (the import files one-sided entries as proposals that must not enter the live pending list, and no filter can do it because NorvoQL string filters have no prefix match). `0006_import_cursor.nql` is a byte-copy of `0005` plus the `ImportCursor` type and its own header. Then `schema.nql` becomes identical to `0006`. `operations/import.nql` is new and carries only the cursor's two operations, in `MemoryByProvenance`'s style.
 
 - [ ] **Step 4: Run `norvo check` and the tests**
 
@@ -111,7 +112,7 @@ Expected: check passes; PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add Sources/MusaiCore/migrations Sources/MusaiCore/schema.nql Tests/MusaiCoreTests/SchemaTests.swift
+git add Sources/MusaiCore/migrations Sources/MusaiCore/schema.nql Sources/MusaiCore/operations/import.nql Tests/MusaiCoreTests/SchemaTests.swift
 git commit -m "feat: migrated decisions have their own state, and the import keeps a cursor"
 ```
 
@@ -121,12 +122,11 @@ git commit -m "feat: migrated decisions have their own state, and the import kee
 
 **Files:**
 - Modify: `Sources/MusaiCore/operations/memories.nql`, `operations/sessions.nql`, `operations/review.nql`
-- Create: `Sources/MusaiCore/operations/import.nql`
 - Test: `Tests/MusaiCoreTests/ImportOperationsTests.swift`
 
 **Interfaces:**
-- Consumes: Task 1's `MIGRATED` and `ImportCursor`.
-- Produces: `RecordMemoryForSession($kind!, $origin!, $text, $narrative, $concepts, $provenance, $slug: String, $memorySessionId: String)` — one operation for both cases, because evidence in a bound session should bind to its project and evidence in an unbound one should not; `MemoriesWithoutProject($first: Int = 200)`; `UpsertSessionUnbound($memorySessionId!, $platform!, $cwd, $title, $status = ACTIVE, $startedAt!)`; `RecordMigratedProposal($title!, $rationale, $act!, $origin: String!, $slug: String)`; `MigratedDecisionsQuery($first: Int = 50)`; `ImportCursorQuery($source!)`.
+- Consumes: Task 1's `MIGRATED`.
+- Produces: `RecordMemoryForSession($kind!, $origin!, $text, $narrative, $concepts, $provenance, $slug: String, $memorySessionId: String)` — one operation for both cases, because evidence in a bound session should bind to its project and evidence in an unbound one should not; `MemoriesWithoutProject($first: Int = 200)`; `UpsertSessionUnbound($memorySessionId!, $platform!, $cwd, $title, $status = ACTIVE, $startedAt!)`; `RecordMigratedProposal($title!, $rationale, $act!, $origin: String!, $slug: String)`; `MigratedDecisionsQuery($first: Int = 50)`. (`ImportCursorQuery`/`SetImportCursorMutation` are Task 1's.)
 
 - [ ] **Step 1: Write the failing test**
 
