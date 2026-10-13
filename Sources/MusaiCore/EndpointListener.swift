@@ -190,6 +190,7 @@ public final class EndpointListener: @unchecked Sendable {
         case 405: "Method Not Allowed"
         case 413: "Payload Too Large"
         case 500: "Internal Server Error"
+        case 503: "Service Unavailable"
         default: "OK"
         }
     }

@@ -29,7 +29,7 @@ struct MusaiHook {
             let event: String? = arguments.first
             let stdin = FileHandle.standardInput.readDataToEndOfFile()
             guard let client = await connectedClient() else {
-                diagnose("the backend is not running; run `musai install --helper` once")
+                diagnose("the backend is not running; run `musai install` once")
                 return
             }
             emit(
@@ -37,7 +37,7 @@ struct MusaiHook {
                     event: event, stdin: stdin, cwd: FileManager.default.currentDirectoryPath))
         case "review":
             guard let client = await connectedClient() else {
-                diagnose("the backend is not running; run `musai install --helper` once")
+                diagnose("the backend is not running; run `musai install` once")
                 return
             }
             await Review(client: client).run()
@@ -113,7 +113,7 @@ struct MusaiHook {
             loadAgent(plistAt: launchAgents.appending(path: "\(MusaiInstall.agentLabel).plist"))
             print("musai: installed Musai.app at \(root.path)")
             print("musai: registered \(MusaiInstall.agentLabel) to start at login, serving \(store.path)")
-            print("musai: moving Musai.app breaks that registration; run `musai install` again after moving it")
+            print("musai: moving or deleting Musai.app breaks that registration; run `musai install` again after moving it")
             print(try ClaudeCodeHooks.install(executable: executable.path, settingsURL: settings))
         } catch {
             diagnose(oneLine(error))

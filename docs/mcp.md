@@ -7,8 +7,9 @@ The hooks put Musai in the host's loop; this puts it in the agent's. `musai mcp`
 JSON-RPC from stdin and writes one reply per message to stdout, and stdout carries **nothing else** — a stray
 write there corrupts the session, so every diagnostic goes to stderr.
 
-Like every other client, it never opens the store. It reaches the backend's loopback endpoint with the token
-from `helper.json`, so exactly one process — the agent — owns the file.
+Like every other client, it never opens the store. It reaches the backend's loopback endpoint through the port
+in `helper.json`, with the token read from the `token` file beside the store — the record republishes that token,
+but the file is the source of truth — so exactly one process, the agent, owns the store.
 
 ## The tools
 

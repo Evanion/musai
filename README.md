@@ -59,7 +59,11 @@ This is the half a test cannot cover: whether the backend stays out of the perso
 2. If anything looks wrong — nothing captured, no status item, a hook complaining — run `musai doctor`. It
    reads the record, asks `/health` when the agent answers, and prints the tail of the log.
 3. Run `musai review`, and confirm or correct what the curator proposes.
-4. Start a new session, and read what the agent is handed: the decisions you confirmed, in your own words,
+4. Watch the agent die and come back: with a session open, `launchctl kickstart -k gui/$(id -u)/dev.musai.agent`
+   kills the running agent mid-flight, and launchd starts it again — `musai doctor` shows a new pid, and the next
+   hook captures as though nothing had happened. Then Quit from the menu bar: that one stays quit, because Quit
+   boots the job out of launchd on purpose, and `musai install` is what brings it back.
+5. Start a new session, and read what the agent is handed: the decisions you confirmed, in your own words,
    and where each one landed.
 
 Then answer the question this slice exists to answer: **did the backend stay invisible until you went
