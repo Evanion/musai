@@ -74,7 +74,7 @@ type Decision {
   project: Project
   subject: Node
   act: ActKind! @convert(from: "ActKind") @index
-  state: DecisionState! @convert(from: "DecisionState!") @index
+  state: DecisionState! @convert(from: "DecisionState") @index
   settledAt: DateTime
   persistedAt: DateTime
   document: Node

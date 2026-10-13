@@ -8,11 +8,12 @@
 # already knows keep their positions as a prefix, so `PROPOSED SETTLED PERSISTED` do not move. This
 # migration writes no rows — the import sets the state when it files one — so it carries no data step.
 #
-# `Decision.state`'s `@convert(from:)` is re-spelled `DecisionState!`. The field itself has not moved since
-# 0003, where it became required and the annotation recorded that; but the engine re-reads a carried
-# annotation against the snapshot immediately before it, so growing the enum reaches the conversion branch
-# and demands `from` name *that* snapshot's spelling (`Decision.state` was `DecisionState!`, not
-# `DecisionState`). Naming it keeps the annotation — and 0003's history with it — rather than dropping it.
+# `Decision.state`'s `@convert(from:)` reads `DecisionState` — the spelling 0003 gave it, where the field
+# became required and the annotation recorded the change. For a while this header carried the identity,
+# `DecisionState!`, as a workaround: the engine re-read a carried annotation against the snapshot
+# immediately before it, so growing the enum above reached the conversion branch and demanded `from` name
+# *that* snapshot's spelling, and the identity was what satisfied it. Norvo 0.0.2 fixed that check, so the
+# workaround is retired and the annotation is spelled naturally again.
 enum ProjectStatus { ACTIVE PAUSED DONE ARCHIVED }
 enum IdeaStatus { OPEN PROMOTED PARKED DROPPED }
 enum SpecKind { REQUIREMENT DESIGN }
@@ -80,7 +81,7 @@ type Decision {
   project: Project
   subject: Node
   act: ActKind! @convert(from: "ActKind") @index
-  state: DecisionState! @convert(from: "DecisionState!") @index
+  state: DecisionState! @convert(from: "DecisionState") @index
   settledAt: DateTime
   persistedAt: DateTime
   document: Node
