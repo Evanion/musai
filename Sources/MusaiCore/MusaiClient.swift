@@ -83,6 +83,48 @@ public struct MusaiClient: Sendable {
         try await proposalsReply().gap
     }
 
+    /// What a person half remembers. A `q` searches the store's full text over `Memory.text`; a `project` with
+    /// no `q` lists that project's memories, newest first; neither lists the memories that belong to no project
+    /// — the majority of an imported corpus, and the reason `MemorySummary.project` is optional. Nothing found
+    /// is an empty list, never an error.
+    public func memories(project: String? = nil, q: String? = nil) async throws -> [MemorySummary] {
+        try await ensureCompatible()
+        var query: [String: String] = [:]
+        if let q { query["q"] = q }
+        if let project { query["project"] = project }
+        let (data, response) = try await get(path: "memories", query: query)
+        try ensureSuccess(response, data)
+        return try decode(MemoriesReply.self, from: data).memories
+    }
+
+    /// The imported history awaiting confirmation: the migration view, which `musai review --migrated` reads and
+    /// which the live review list deliberately does not carry.
+    public func migrated() async throws -> [MigratedProposal] {
+        try await ensureCompatible()
+        let (data, response) = try await get(path: "migrated", query: [:])
+        try ensureSuccess(response, data)
+        return try decode(MigratedReply.self, from: data).proposals
+    }
+
+    /// One pass of the import over the corpus at `source` — claude-mem's database, read-only, which the agent
+    /// opens on the backend's side and this client never touches.
+    ///
+    /// **One request is one pass**, not the whole corpus: the endpoint serves one request at a time, so a
+    /// request that imported everything would block every capture for as long as it ran. A caller repeats this
+    /// until a pass returns an empty `ImportReport` — which is exactly what an idle pass returns.
+    public func importHistory(from source: URL, dryRun: Bool = false) async throws -> ImportReport {
+        try await ensureCompatible()
+        struct Body: Encodable {
+            let source: String
+            let dryRun: Bool
+        }
+        let (data, response) = try await post(
+            path: "admin/import",
+            body: try EndpointWire.encoder().encode(Body(source: source.path, dryRun: dryRun)))
+        try ensureSuccess(response, data)
+        return try decode(ImportReportReply.self, from: data).report
+    }
+
     /// One action, applied as the person. `skip` is the absence of an action, so it never reaches the wire.
     public func apply(_ action: ReviewAction, to id: UUID) async throws {
         try await ensureCompatible()

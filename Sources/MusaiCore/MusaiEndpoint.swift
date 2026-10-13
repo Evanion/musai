@@ -70,6 +70,12 @@ public struct MusaiEndpoint: Sendable {
                 return try await context(request, db: db)
             case ("GET", "/proposals"):
                 return try await proposals(db: db)
+            case ("GET", "/memories"):
+                return try await memories(request, db: db)
+            case ("GET", "/migrated"):
+                return try await migrated(db: db)
+            case ("POST", "/admin/import"):
+                return try await importHistory(request, db: db)
             case ("POST", "/admin/restart"):
                 return try await restart()
             case ("POST", let path) where path.hasPrefix("/proposals/"):
@@ -185,6 +191,91 @@ public struct MusaiEndpoint: Sendable {
         return try .json(reply)
     }
 
+    /// `GET /memories` — what a person half remembers.
+    ///
+    /// The query is chosen by what the request gives: a `q` searches the store's full text over `Memory.text`;
+    /// a `project` with no `q` lists that project's memories, newest first; neither lists the memories bound to
+    /// no project, which is most of an imported corpus. Nothing found is an empty list with a 200, never an
+    /// error — a search that matches nothing and a project that does not exist are both ordinary answers.
+    ///
+    /// A `q` is not narrowed by a `project`: the search operation has no project filter, and inventing one here
+    /// would mean either a fourth query or a filtered list that lies about its bound. `musai recall --project`
+    /// asks for the listing, and the search asks for the words.
+    private func memories(_ request: EndpointRequest, db: Database) async throws -> EndpointResponse {
+        let query = request.query["q"]
+        let project = request.query["project"]
+        let found: [MemorySummary]
+        if let query, !query.isEmpty {
+            found = try await searched(query, db: db)
+        } else if let project, !project.isEmpty {
+            found = try await db.query(MemoriesForProjectQuery(.init(slug: project))).memories.map {
+                Self.summary($0)
+            }
+        } else {
+            found = try await db.query(MemoriesWithoutProjectQuery()).memories.map { Self.summary($0) }
+        }
+        return try .json(MemoriesReply(memories: found))
+    }
+
+    /// The full-text hits, as the reply's shape.
+    ///
+    /// The search's own projection is deliberately the fields that rank a hit; the reply promises the memory's
+    /// full shape, so each hit is read back by its id. That is bounded by the search's own bound — `k` and
+    /// `first` are 20 each — and it keeps one summary shape for all three queries rather than a second, thinner
+    /// one a client would have to tell apart. A hit that is gone by the time it is read is dropped rather than
+    /// returned half-filled.
+    private func searched(_ q: String, db: Database) async throws -> [MemorySummary] {
+        let hits = try await db.query(SearchMemoriesQuery(.init(q: q))).memoriesConnection.edges
+        var memories: [MemorySummary] = []
+        for hit in hits {
+            if let row = try await db.query(MemoryByIDQuery(.init(id: hit.node.id))).memory {
+                memories.append(Self.summary(row))
+            }
+        }
+        return memories
+    }
+
+    /// `GET /migrated` — the imported, one-sided history, in the view of its own. Separate from `/proposals`
+    /// so that live review is never buried under an import, and a `MigratedProposal` rather than a `Proposal`
+    /// because claude-mem recorded no utterance for these: there is no `said` to carry.
+    ///
+    /// Every migrated row the import writes carries its `origin`, which is what a person traces it back by; the
+    /// empty string is only for a row that somehow has none, so one old row cannot fail the whole view.
+    private func migrated(db: Database) async throws -> EndpointResponse {
+        let reply = MigratedReply(
+            proposals: try await db.query(MigratedDecisionsQuery()).decisions.map {
+                MigratedProposal(id: $0.id, title: $0.title, act: $0.act, origin: $0.origin ?? "")
+            })
+        return try .json(reply)
+    }
+
+    /// `POST /admin/import` — one pass of the import, over the corpus the body names.
+    ///
+    /// **One request is one pass** — one batch per stage, exactly as `MusaiImport.run` defines it, and
+    /// deliberately never a loop to exhaustion. This endpoint serves one request at a time, so a request that
+    /// imported a whole 1 GB corpus would hold that slot and block every *capture* — every hook — for as long
+    /// as it ran. One pass per request is what keeps the import short, resumable and idle-friendly, and
+    /// `musai import` is what repeats it until a pass reports nothing left.
+    ///
+    /// The route opens no store: it writes through the database the agent already holds, the one this endpoint
+    /// serves from, because exactly one process may have the store open and the engine refuses a second opener
+    /// on the same file. The corpus is a *different* file, opened read-only by `ClaudeMemReader`, and the
+    /// import never writes to it. A dry run writes nothing at all, cursors included.
+    private func importHistory(_ request: EndpointRequest, db: Database) async throws -> EndpointResponse {
+        struct Body: Codable {
+            let source: String
+            let dryRun: Bool?
+        }
+        // A body that is not the shape this protocol promised is the client's mistake, not a failed import.
+        guard let body = try? EndpointWire.decoder().decode(Body.self, from: request.body),
+            !body.source.isEmpty
+        else { return .error(400, "source is required") }
+        let importer = MusaiImport(
+            db: db, reader: try ClaudeMemReader(url: URL(fileURLWithPath: body.source)),
+            discovery: ImportDiscovery(db: db), as: MusaiActors.migrator("claude-mem"))
+        return try .json(ImportReportReply(report: try await importer.run(dryRun: body.dryRun ?? false)))
+    }
+
     /// `POST /proposals/{id}/{settle|persist|drop}` — one action, applied as the person.
     private func act(on path: String, body: Data, db: Database) async throws -> EndpointResponse {
         let parts = path.split(separator: "/").map(String.init)
@@ -225,8 +316,10 @@ public struct MusaiEndpoint: Sendable {
 
     /// A path we serve under another method is a 405; a path we do not serve at all is a 404.
     private func miss(_ request: EndpointRequest) -> EndpointResponse {
-        let known = ["/health", "/capture", "/context", "/proposals", "/admin/restart"].contains(request.path)
-            || Self.isProposalAction(request.path)
+        let known = [
+            "/health", "/capture", "/context", "/proposals", "/memories", "/migrated", "/admin/restart",
+            "/admin/import",
+        ].contains(request.path) || Self.isProposalAction(request.path)
         return known ? .error(405, "method not allowed") : .error(404, "no such route")
     }
 
@@ -236,6 +329,35 @@ public struct MusaiEndpoint: Sendable {
             return false
         }
         return ["settle", "persist", "drop"].contains(parts[2])
+    }
+
+    /// One memory row as the wire's summary. Each listing's row type is its own — the engine generates one per
+    /// query — so each is turned into the one shape a client reads; a row whose `project` is absent means the
+    /// memory belongs to no project, which the summary says by `nil` rather than by omission.
+    private static func summary(_ row: MemoriesForProjectQuery.Data.Memories) -> MemorySummary {
+        summary(
+            id: row.id, text: row.text, kind: row.kind, origin: row.origin, provenance: row.provenance,
+            project: row.project?.slug)
+    }
+
+    private static func summary(_ row: MemoriesWithoutProjectQuery.Data.Memories) -> MemorySummary {
+        summary(
+            id: row.id, text: row.text, kind: row.kind, origin: row.origin, provenance: row.provenance,
+            project: row.project?.slug)
+    }
+
+    private static func summary(_ row: MemoryByIDQuery.Data.Memory_) -> MemorySummary {
+        summary(
+            id: row.id, text: row.text, kind: row.kind, origin: row.origin, provenance: row.provenance,
+            project: row.project?.slug)
+    }
+
+    private static func summary(
+        id: UUID, text: String?, kind: MemoryKind, origin: MemoryOrigin, provenance: String?,
+        project: String?
+    ) -> MemorySummary {
+        MemorySummary(
+            id: id, text: text, kind: kind, origin: origin, provenance: provenance, project: project)
     }
 
     private func undrainedCount(_ db: Database) async throws -> Int {

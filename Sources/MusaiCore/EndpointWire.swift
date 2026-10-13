@@ -1,4 +1,5 @@
 import Foundation
+import NorvoLite
 
 /// The protocol's shape: the types every client shares, in one place, because the endpoint serves them and
 /// Task 3's client consumes them.
@@ -165,5 +166,76 @@ public struct DecisionReply: Sendable, Equatable, Codable {
         self.id = id
         self.state = state
         self.documentRef = documentRef
+    }
+}
+
+/// The `GET /memories` body: what a person half remembers, found by its text or listed for a project.
+public struct MemoriesReply: Sendable, Equatable, Codable {
+    public let memories: [MemorySummary]
+
+    public init(memories: [MemorySummary]) {
+        self.memories = memories
+    }
+}
+
+/// One memory as a client reads it. `project` is optional because most of an imported corpus predates any
+/// project, and history that cannot be named is still history; `text` is optional because a memory may hold
+/// only a narrative.
+public struct MemorySummary: Sendable, Equatable, Codable {
+    public let id: UUID
+    public let text: String?
+    public let kind: MemoryKind
+    /// Where the row came from: written by the person, filed by the curator, or read in from another tool.
+    public let origin: MemoryOrigin
+    /// The source row's own identity, present on migrated history and absent on our own.
+    public let provenance: String?
+    public let project: String?
+
+    public init(
+        id: UUID, text: String?, kind: MemoryKind, origin: MemoryOrigin, provenance: String?, project: String?
+    ) {
+        self.id = id
+        self.text = text
+        self.kind = kind
+        self.origin = origin
+        self.provenance = provenance
+        self.project = project
+    }
+}
+
+/// The `GET /migrated` body: the imported, one-sided history, in the view of its own.
+public struct MigratedReply: Sendable, Equatable, Codable {
+    public let proposals: [MigratedProposal]
+
+    public init(proposals: [MigratedProposal]) {
+        self.proposals = proposals
+    }
+}
+
+/// One imported entry awaiting the person's confirmation. Deliberately a different type from `Proposal`: a
+/// live proposal carries `said`, the turn it came from, and claude-mem recorded no utterance for these — so
+/// there is nothing to put in a `said`, and a field that is always empty would read as a missing one.
+public struct MigratedProposal: Sendable, Equatable, Codable {
+    public let id: UUID
+    public let title: String
+    public let act: ActKind
+    /// The source row this came from, which is how a person traces it back into the corpus.
+    public let origin: String
+
+    public init(id: UUID, title: String, act: ActKind, origin: String) {
+        self.id = id
+        self.title = title
+        self.act = act
+        self.origin = origin
+    }
+}
+
+/// The `POST /admin/import` body's answer: what the one pass the request asked for did. The report is the
+/// import's own type, so a client and the driver cannot disagree about what a number means.
+public struct ImportReportReply: Sendable, Equatable, Codable {
+    public let report: ImportReport
+
+    public init(report: ImportReport) {
+        self.report = report
     }
 }
