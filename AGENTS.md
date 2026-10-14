@@ -40,6 +40,11 @@ package).
   `docs/superpowers/rulings/YYYY-MM-DD-<slice>-rulings.md`. Live findings stay in the issue tracker;
   the rulings file is the decisions and the tracker is the work, and neither replaces the other,
   because the working ledger is deleted with the workspace.
+- **A CI failure is fixed in the next pull request, not carried forward.** When CI reports a defect
+  — a suite that hangs, a client that waits longer than its budget, a toolchain-specific crash — it
+  is scheduled immediately after the work in hand, in its own pull request, rather than deferred to
+  a later slice. A pipeline that is red and stays red stops being read, and a gate nobody reads is
+  not a gate.
 - **A review is budgeted, and the whole-branch review is not a re-read.** Per-task reviews read
   their own diff; the final whole-branch review gets the task verdicts, a short change summary
   and the cross-cutting questions — not the entire branch diff, the full spec, the plan and the
