@@ -126,11 +126,16 @@ let store = libraryURL(from: arguments)
 
 let agent: MusaiAgent
 do {
-    // The producer is turned on here, where the one process that owns the store decides what it runs: without
-    // it the graph only grows by import and by hand, and claude-mem cannot be switched off.
+    // The model is turned on here, and only here, where the one process that owns the store decides what it
+    // runs: the detector proposes from the session, the producer files ambient memory, and without both the
+    // graph only grows by import and by hand. `MusaiCore` deliberately has no default that would reach a model
+    // behind a caller's back, so "this process talks to a model" is a line someone can read at the place that
+    // made the choice. One configuration is read and handed to both, so there is one answer to "which model".
+    let configuration = (try? ModelConfiguration.load()) ?? .default
     agent = try MusaiAgent(
         libraryURL: store,
-        filer: ModelMemoryFiler(configuration: (try? ModelConfiguration.load()) ?? .default))
+        detector: ModelDecisionDetector(provider: OpenAICompatibleProvider(configuration: configuration)),
+        filer: ModelMemoryFiler(configuration: configuration))
 } catch {
     fail("\(error)")
 }

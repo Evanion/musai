@@ -79,8 +79,13 @@ public final class MusaiAgent: @unchecked Sendable {
 
     /// - Parameters:
     ///   - libraryURL: the one store this agent serves, and whose directory holds the record and the token.
-    ///   - detector: what the curator asks for proposals; the real one talks to the configured model.
-    ///   - filer: what files the curator's ambient memory; `nil` files none.
+    ///   - detector: what the curator asks for proposals. Required, and deliberately so: the real one talks to
+    ///     the configured model, so a caller that wants one has to say so where it decides what this process
+    ///     runs. `MusaiCore` never chooses a model on a caller's behalf — a default that reached the network
+    ///     would make "does this run talk to a model?" a question the code cannot answer by reading it, and on a
+    ///     machine with no model it would turn into a silent wait rather than a missing argument.
+    ///   - filer: what files the curator's ambient memory; `nil` files none, which is an honest absence rather
+    ///     than a reach for anything. Optional for that reason, and only for that reason.
     ///   - logURL: where the log a person reads goes. Injectable for the same reason the store is: a test
     ///     must not write into the developer's real `~/Library/Logs/Musai`.
     ///   - open/probe/sleep/attempts: the opening and its backoff, injectable so a test drives a held lock or
@@ -88,7 +93,7 @@ public final class MusaiAgent: @unchecked Sendable {
     public init(
         libraryURL: URL,
         options: Options = .init(),
-        detector: (any DecisionDetector)? = nil,
+        detector: any DecisionDetector,
         filer: (any MemoryFiler)? = nil,
         logURL: URL = MusaiLog.defaultURL,
         open: @escaping StoreOpener = { url, options in
@@ -109,11 +114,7 @@ public final class MusaiAgent: @unchecked Sendable {
         self.tokenURL = libraryURL.deletingLastPathComponent().appending(path: "token")
         self.state = EndpointState(storePath: libraryURL.path)
         self.log = MusaiLog(url: logURL)
-        self.detector =
-            detector
-            ?? ModelDecisionDetector(
-                provider: OpenAICompatibleProvider(
-                    configuration: (try? ModelConfiguration.load()) ?? .default))
+        self.detector = detector
         self.filer = filer
         self.open = open
         self.probe = probe

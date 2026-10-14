@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# This gate is deliberately the smaller half of CI, and it is that way because `main` requires
+# passing checks: a job that cannot pass on a GitHub runner blocks every pull request in the
+# repository, including the one that would fix it.
+#
+# What runs here works on a GitHub macOS runner today — the engine resolves from its published
+# bundle, the codegen plugin runs, and every target compiles, tests included.
+#
+# What is missing, and arrives in the next pull request, is `swift test`. On these runners the suite
+# does not finish: it hangs inside `aDirectoryWithoutGitBecomesItsOwnProject` on macOS 15, and the
+# test binary dies with SIGBUS at once on macOS 26 with Swift 6.3.3. Both are tracked as issues
+# (the hang, and the toolchain crash), together with a third finding — a client that waits the
+# full sixty-second URLSession default for an endpoint that has stopped answering, where the
+# smallest hook budget in this project is fifteen seconds.
+#
+# The moment those are fixed this job gains a sibling that runs the suite and gates on it.
+jobs:
+  build:
+    name: build
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out Musai
+        uses: actions/checkout@v4
+        with:
+          path: musai
+
+      # The engine is a SwiftPM *path* dependency, so it has to sit beside the repository. It is a
+      # public repository, so the default token reads it and no secret is needed.
+      - name: Check out the engine package
+        uses: actions/checkout@v4
+        with:
+          repository: NorvoDB/norvo-swift
+          path: norvo-swift
+
+      - name: Show the toolchain
+        run: swift --version
+
+      # The cache key includes the schema, the migrations and the operations, not just
+      # Package.resolved — because NorvoCodegen's generated Swift outlives the schema it came from,
+      # so a cached .build whose schema has since changed would compile stale symbols. An earlier
+      # run of this workflow hung for an hour inside `swift test` and the log showed nothing after
+      # "Build complete!", which is why any test step added here wants NSUnbufferedIO set.
+      - name: Cache the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            musai/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-${{ runner.arch }}-swift-${{ hashFiles('musai/Package.resolved') }}-${{ hashFiles('musai/Sources/MusaiCore/schema.nql', 'musai/Sources/MusaiCore/migrations/**', 'musai/Sources/MusaiCore/operations/**') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-swift-
+
+      # NORVO_LOCAL is deliberately NOT set. With it unset the package resolves the *released*
+      # engine bundle — binaries-v0.0.2, which carries the @convert fix this repository depends on.
+      # Setting it would point the build at whatever a local engine checkout happens to contain,
+      # which is how a stale pre-fix build once failed `norvo codegen` here.
+      - name: Build, tests included
+        working-directory: musai
+        env:
+          MUSAI_NORVO_PATH: ${{ github.workspace }}/norvo-swift
+        run: swift build --build-tests
