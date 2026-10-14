@@ -69,6 +69,28 @@ private let decisionsJSON = #"{"decisions":[{"title":"One Norvo file","rationale
         #expect(format?["type"] as? String == "json_schema")
     }
 
+    /// The plan's number for the model path — 60 s, under the host's 120 s — is the number that reaches the
+    /// wire, and a person who edits `timeoutSeconds` gets exactly that on the request. Nothing here leans on
+    /// `URLSession`'s own default, which would be a coincidence rather than the plan's decision.
+    @Test func theModelRequestCarriesTheConfiguredTimeout() async throws {
+        let recorder = Recorder(response: openAIResponse(decisionsJSON))
+        let (provider, configuration) = configured(recorder)
+        _ = try await provider.complete(system: "s", user: "u", schema: Data(#"{"type":"object"}"#.utf8))
+
+        let sent = try #require(recorder.sent.first)
+        #expect(sent.request.timeoutInterval == configuration.timeoutSeconds)
+        #expect(ModelConfiguration.default.timeoutSeconds == 60)
+
+        // An edited file is what the client sends, not what the default happens to be.
+        let edited = Recorder(response: openAIResponse(decisionsJSON))
+        var shorter = ModelConfiguration.default
+        shorter.timeoutSeconds = 12
+        let providerWithShorter = OpenAICompatibleProvider(
+            configuration: shorter, transport: StubTransport(recorder: edited))
+        _ = try await providerWithShorter.complete(system: "s", user: "u", schema: Data(#"{"type":"object"}"#.utf8))
+        #expect(try #require(edited.sent.first).request.timeoutInterval == 12)
+    }
+
     @Test func aKeyComesFromTheEnvironmentAndIsNeverStored() async throws {
         let recorder = Recorder(response: openAIResponse("{}"))
         var configuration = ModelConfiguration.default

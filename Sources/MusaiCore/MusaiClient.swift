@@ -6,7 +6,10 @@ import Foundation
 public struct MusaiClient: Sendable {
     /// Why a call could not be made. A failure is reported, never guessed at.
     public enum Failure: Error, Equatable {
-        /// Nothing answered at the recorded port — a stale record, or no backend at all.
+        /// Nothing answered at the recorded port — a stale record, no backend at all, or an endpoint that
+        /// accepted the connection and then stopped answering. A stall reaches here too, because the client
+        /// bounds itself: it is reported while the host's hook budget still has room to read the report,
+        /// rather than the caller being killed by the host.
         case unreachable
         /// The backend speaks another major protocol. A minor difference is additive; a major one is not.
         case incompatibleProtocol(helper: String, expected: String)
@@ -18,6 +21,13 @@ public struct MusaiClient: Sendable {
 
     public let record: HelperRecord
     public let token: String
+
+    /// The client's own bound on one request, in seconds. A hook has a short budget — the plan gives
+    /// `UserPromptSubmit` fifteen seconds and `Stop`/`PostToolUse` a hundred and twenty — and a client that
+    /// waits out `URLSession`'s sixty-second default is not bounding itself, it is relying on the host to kill
+    /// it. Five seconds sits comfortably inside the smallest of those budgets, and a stall is reported while
+    /// the host still has time to read the report.
+    public static let requestTimeout: TimeInterval = 5
 
     /// The handshake a caller already made, if it made one. When present it is reused rather than re-fetched,
     /// so a client that checked `/health` before it posted pays for that check only once.
@@ -31,7 +41,13 @@ public struct MusaiClient: Sendable {
         self.token = token
         self.handshake = handshake
         self.baseURL = URL(string: "http://127.0.0.1:\(record.port)")!
-        self.session = .shared
+        // A session of the client's own, so the bound is the client's and not `URLSession.shared`'s: an
+        // ephemeral one holds nothing between calls — no cache a stale `/health` could come back from — and
+        // carries the timeout above on every request this client makes.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = Self.requestTimeout
+        configuration.timeoutIntervalForResource = Self.requestTimeout
+        self.session = URLSession(configuration: configuration)
     }
 
     /// Whether a helper advertising `protocolVersion` speaks a protocol this client understands: the same

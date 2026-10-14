@@ -1,6 +1,55 @@
+import Darwin
 import Foundation
 import Testing
 @testable import MusaiCore
+
+/// A port that completes the TCP handshake and then never answers a word of it: a bare listening socket whose
+/// backlog absorbs the connection, with nothing ever accepting it. It is the shape of a backend that has
+/// stopped answering, and it exists so the client's own bound can be measured without leaving this process.
+private final class StalledEndpoint {
+    let port: UInt16
+    private let descriptor: Int32
+
+    static func make() throws -> StalledEndpoint {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw Failure.noSocket }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = 0
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(descriptor, 8) == 0 else {
+            Darwin.close(descriptor)
+            throw Failure.noSocket
+        }
+        var chosen = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &chosen) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(descriptor, $0, &length)
+            }
+        }
+        guard named == 0 else {
+            Darwin.close(descriptor)
+            throw Failure.noSocket
+        }
+        return StalledEndpoint(port: UInt16(bigEndian: chosen.sin_port), descriptor: descriptor)
+    }
+
+    private init(port: UInt16, descriptor: Int32) {
+        self.port = port
+        self.descriptor = descriptor
+    }
+
+    func shut() { Darwin.close(descriptor) }
+
+    enum Failure: Error { case noSocket }
+}
 
 /// The client, over a real socket: it talks to an in-process listener (Task 2), so these tests exercise the
 /// wire and not the router.
@@ -72,6 +121,32 @@ import Testing
 
         let rows = try await backend.library.db.query(UtterancesForSessionQuery(.init(session: "s1"))).utterances
         #expect(rows.isEmpty)
+    }
+
+    /// The bound this fix exists to hold: a client whose endpoint accepted the connection and then stopped
+    /// answering must give up inside its own timeout. The assertion is near that bound rather than merely
+    /// under a minute, so it fails if nothing sets one — `URLSession` would let this run for sixty seconds,
+    /// which is what CI saw, and four times the `UserPromptSubmit` hook budget the plan allows.
+    @Test func aStalledEndpointIsGivenUpOnInsideTheClientsOwnTimeout() async throws {
+        let stalled = try StalledEndpoint.make()
+        defer { stalled.shut() }
+        let record = HelperRecord(
+            port: stalled.port, token: "a-token", pid: getpid(),
+            protocolVersion: EndpointWire.protocolVersion, storePath: "/tmp/Musai.norvo")
+        let client = MusaiClient(record: record, token: "a-token")
+
+        let start = Date()
+        // A stall is "nothing answered at the recorded port", which is the failure the caller already knows
+        // how to report — never an untyped error escaping the client.
+        await #expect(throws: MusaiClient.Failure.unreachable) {
+            try await client.context(cwd: "/tmp/musai-stalled")
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        // Two seconds of slack is for a loaded machine's dispatch timer, not a second bound: the client's own
+        // bound is pinned above, and the sixty-second default is nowhere near this.
+        #expect(elapsed < MusaiClient.requestTimeout + 2)
+        #expect(MusaiClient.requestTimeout <= 5)
     }
 
     @Test func aMajorVersionMismatchIsRefusedNotGuessed() async throws {

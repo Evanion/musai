@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Network
 import Testing
@@ -138,6 +139,63 @@ private struct ListenerQuietDetector: DecisionDetector {
         let second = try MusaiToken.loadOrCreate(at: url)
         #expect(second == first)
     }
+
+    /// A connection that connects and then says nothing is a client that stalled. The listener answers it and
+    /// lets it go rather than holding the connection — and a task — open forever. The ledger deferred this as
+    /// Minor ("it becomes Important when a long-lived local client exists", "add it when a clock is
+    /// injectable to test"); the deadline here is injectable as a duration, so a short one makes it both.
+    @Test func aConnectionThatSaysNothingIsAnsweredAndDropped() async throws {
+        let made = try await made()
+        defer {
+            made.library.close()
+            try? FileManager.default.removeItem(at: made.store.deletingLastPathComponent())
+        }
+        let listener = EndpointListener(endpoint: made.endpoint, idleTimeout: 0.25)
+        let port = try listener.start()
+        defer { listener.stop() }
+
+        // A raw connection, so the test can hold it open without sending one byte — which is exactly the
+        // client a `URLSession` cannot be made to write.
+        let descriptor = try Self.openConnection(port)
+        defer { close(descriptor) }
+
+        // Three seconds is far past the deadline and far short of forever: without a deadline the read comes
+        // back empty-handed and the test fails here rather than hanging.
+        var guard_ = timeval(tv_sec: 3, tv_usec: 0)
+        _ = setsockopt(
+            descriptor, SOL_SOCKET, SO_RCVTIMEO, &guard_, socklen_t(MemoryLayout<timeval>.size))
+        var buffer = [UInt8](repeating: 0, count: 4_096)
+        let read = recv(descriptor, &buffer, buffer.count, 0)
+
+        #expect(read > 0)
+        let line = String(decoding: buffer.prefix(max(read, 0)), as: UTF8.self)
+            .split(separator: "\r\n").first ?? ""
+        #expect(line == "HTTP/1.1 408 Request Timeout")
+    }
+
+    /// A connected socket to the listener: a blocking `connect` on loopback, which returns as soon as the
+    /// handshake completes.
+    private static func openConnection(_ port: UInt16) throws -> Int32 {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw ListenerError.noSocket }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(port).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard connected == 0 else {
+            close(descriptor)
+            throw ListenerError.noSocket
+        }
+        return descriptor
+    }
+
+    private enum ListenerError: Error { case noSocket }
 
     @Test func aSecondListenerOnTheSamePortFails() async throws {
         let made = try await made()
