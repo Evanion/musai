@@ -15,6 +15,11 @@ public final class EndpointListener: @unchecked Sendable {
     private let endpoint: MusaiEndpoint
     private let host: String
     private let requestedPort: UInt16
+    /// How long a connection may say nothing before the listener answers it and lets it go. A stalled client
+    /// — one that connects and never sends, or stops mid-body — would otherwise hold the connection, and the
+    /// task serving it, open forever; a live client's request arrives whole and at once, so this expires only
+    /// on the clients that are already gone.
+    private let idleTimeout: TimeInterval
     private let queue = DispatchQueue(label: "dev.musai.endpoint.listener")
 
     /// `listener` and `connections` are touched from the network queue, the per-connection tasks, and
@@ -23,10 +28,14 @@ public final class EndpointListener: @unchecked Sendable {
     private var listener: NWListener?
     private var connections: [ObjectIdentifier: NWConnection] = [:]
 
-    public init(endpoint: MusaiEndpoint, host: String = "127.0.0.1", port: UInt16 = 0) {
+    public init(
+        endpoint: MusaiEndpoint, host: String = "127.0.0.1", port: UInt16 = 0,
+        idleTimeout: TimeInterval = 30
+    ) {
         self.endpoint = endpoint
         self.host = host
         self.requestedPort = port
+        self.idleTimeout = idleTimeout
     }
 
     deinit { stop() }
@@ -152,14 +161,14 @@ public final class EndpointListener: @unchecked Sendable {
 
     private func receive(from connection: NWConnection) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
+            let read = Read(continuation)
             connection.receive(minimumIncompleteLength: 1, maximumLength: Self.readChunk) {
                 data, _, _, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: data ?? Data())
-                }
+                if let error { read.finish(.failure(error)) } else { read.finish(.success(data ?? Data())) }
             }
+            // The deadline: whichever of the socket and the clock arrives first ends the read, so a connection
+            // that says nothing cannot hold the task — and the connection — open forever.
+            queue.asyncAfter(deadline: .now() + idleTimeout) { read.finish(.failure(Refusal.timedOut)) }
         }
     }
 
@@ -188,6 +197,7 @@ public final class EndpointListener: @unchecked Sendable {
         case 401: "Unauthorized"
         case 404: "Not Found"
         case 405: "Method Not Allowed"
+        case 408: "Request Timeout"
         case 413: "Payload Too Large"
         case 500: "Internal Server Error"
         case 503: "Service Unavailable"
@@ -259,6 +269,29 @@ public final class EndpointListener: @unchecked Sendable {
 
         static let malformed = Refusal(response: .error(400, "malformed request"))
         static let tooLarge = Refusal(response: .error(413, "request body too large"))
+        /// The idle read deadline passed: the client connected and then stopped talking. It gets an answer
+        /// rather than silence, and then the connection is let go.
+        static let timedOut = Refusal(response: .error(408, "request timed out"))
+    }
+
+    /// One read's outcome, resumed by whichever of the socket and the idle deadline arrives first and by
+    /// nothing after: the deadline timer that fires once a read has already completed is a no-op rather than
+    /// a second resume.
+    private final class Read: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Data, any Error>?
+
+        init(_ continuation: CheckedContinuation<Data, any Error>) {
+            self.continuation = continuation
+        }
+
+        func finish(_ result: Result<Data, any Error>) {
+            lock.lock()
+            let continuation = self.continuation
+            self.continuation = nil
+            lock.unlock()
+            continuation?.resume(with: result)
+        }
     }
 
     /// The bind's first outcome, carried from the network queue back to the thread waiting in `start`. First
